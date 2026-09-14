@@ -1,0 +1,1 @@
+cannot read <TMP>/homes/snapshot-nostate/.config/tg-orchestrator/state.json: ENOENT: no such file or directory, open '<TMP>/homes/snapshot-nostate/.config/tg-orchestrator/state.json'

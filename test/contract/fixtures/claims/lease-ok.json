@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "acquired": true,
+  "renewed": false,
+  "took_over_from": null,
+  "chat_id": -100200,
+  "thread_id": 7,
+  "state": "held",
+  "reason": null,
+  "owner": "orchestrator",
+  "pid": null,
+  "alive": null,
+  "inbox": "coop:orchestrator",
+  "note": null,
+  "status": "held",
+  "leased_at": "<ts>",
+  "age": "<dur>",
+  "expires_at": "<ts>",
+  "expires_in": "<dur>",
+  "released_at": null,
+  "warning": "lease taken, but the coop mailbox could not be prepared: coop.sh not found at <TMP>/git/work/claude-coop/coop.sh — set CLAIMS_COOP to your claude-coop checkout"
+}

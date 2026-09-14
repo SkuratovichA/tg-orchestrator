@@ -1,0 +1,4 @@
+ffffffff  02-03 04:05        personal /opt/demo/git/other/repo
+          Собери сводку по топикам за неделю
+
+full text of one: sessions.mjs show <id-prefix>

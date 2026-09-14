@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "chat_id": -100123,
+  "owner": "other-bot",
+  "released": [],
+  "refused": [
+    {
+      "message_id": 502,
+      "owner": "orchestrator",
+      "reason": "held by orchestrator"
+    }
+  ]
+}

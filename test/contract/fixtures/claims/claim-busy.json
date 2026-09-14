@@ -1,0 +1,19 @@
+{
+  "ok": false,
+  "chat_id": -100123,
+  "owner": "other-bot",
+  "acquired": [],
+  "busy": [
+    {
+      "message_id": 501,
+      "owner": "orchestrator",
+      "pid": null,
+      "alive": null,
+      "status": "held",
+      "note": null,
+      "since": "<ts>",
+      "age": "<dur>"
+    }
+  ],
+  "chat_owner": null
+}

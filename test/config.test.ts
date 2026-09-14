@@ -1,0 +1,337 @@
+// node --test config.test.ts
+//
+// config.ts took over the hand parsing runner.mjs used to do inline, so what
+// matters here is that it kept every quirk: which source wins for which
+// variable, which bad values fall back instead of failing, and the one
+// sentence the daemon prints when the credentials are unusable.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { after, before, test } from 'node:test';
+import {
+  DEFAULT_API_BASE_URL,
+  DEFAULT_BURST_SETTLE_MS,
+  DEFAULT_BURST_WINDOW_MAX_MS,
+  DEFAULT_CLAUDE_EFFORT,
+  DEFAULT_CLAUDE_FALLBACK_MODEL,
+  DEFAULT_CLAUDE_FALLBACK_TTL_MS,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CLAUDE_TIMEOUT_MS,
+  DEFAULT_FLUSH_WORDS,
+  DEFAULT_LOCALE,
+  DEFAULT_MAX_PARALLEL_TURNS,
+  loadConfig,
+  resolveLocale,
+  MISCONFIG_MESSAGE,
+  parseEnvFile,
+  SOURCES,
+  type Config,
+} from '../src/config.ts';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SRC = path.resolve(HERE, '..', 'src');
+
+let dir: string;
+let envFile: string;
+
+before(() => {
+  dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'config-')));
+  envFile = path.join(dir, 'env');
+});
+after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+const CREDS = ['TELEGRAM_BOT_TOKEN=123456:TEST-TOKEN', 'OWNER_ID=424242'];
+
+function ok(lines: string[], processEnv: Record<string, string | undefined> = {}): Config {
+  fs.writeFileSync(envFile, lines.join('\n') + '\n');
+  const result = loadConfig({ envFile, processEnv });
+  assert.equal(result.kind, 'ok', `expected ok, got ${result.kind}`);
+  if (result.kind !== 'ok') throw new Error('unreachable');
+  return result.config;
+}
+
+function refused(lines: string[], processEnv: Record<string, string | undefined> = {}): string {
+  fs.writeFileSync(envFile, lines.join('\n') + '\n');
+  const result = loadConfig({ envFile, processEnv });
+  assert.equal(result.kind, 'invalid', `expected invalid, got ${result.kind}`);
+  if (result.kind !== 'invalid') throw new Error('unreachable');
+  return result.message;
+}
+
+// ------------------------------------------------------------- env file ---
+
+test('the env-file grammar is the daemon’s, quirks included', () => {
+  const parsed = parseEnvFile(
+    ['# a comment', '', '   ', 'A=1', 'B=x=y', '  C=spaced  ', 'A=2'].join('\n')
+  );
+  assert.deepEqual(parsed, { A: '2', B: 'x=y', C: 'spaced' });
+});
+
+test('a missing env file is its own answer, not an error', () => {
+  const result = loadConfig({ envFile: path.join(dir, 'not-there'), processEnv: {} });
+  assert.deepEqual(result, { kind: 'missing-env-file' });
+});
+
+// ---------------------------------------------------------- credentials ---
+
+test('the credentials come only from the env file', () => {
+  assert.equal(SOURCES.TELEGRAM_BOT_TOKEN, 'env-file');
+  assert.equal(SOURCES.OWNER_ID, 'env-file');
+  const config = ok(CREDS, {
+    TELEGRAM_BOT_TOKEN: 'from-the-shell',
+    OWNER_ID: '1',
+  });
+  assert.equal(config.token, '123456:TEST-TOKEN', 'an inherited shell must not supply the token');
+  assert.equal(config.ownerId, 424242);
+});
+
+test('every unusable credential gets the one pinned sentence', () => {
+  assert.equal(MISCONFIG_MESSAGE, 'env must define TELEGRAM_BOT_TOKEN and OWNER_ID');
+  for (const lines of [
+    ['OWNER_ID=1'],
+    ['TELEGRAM_BOT_TOKEN=', 'OWNER_ID=1'],
+    ['TELEGRAM_BOT_TOKEN=PASTE_TOKEN_HERE', 'OWNER_ID=1'],
+    ['TELEGRAM_BOT_TOKEN=t'],
+    ['TELEGRAM_BOT_TOKEN=t', 'OWNER_ID=0'],
+    ['TELEGRAM_BOT_TOKEN=t', 'OWNER_ID='],
+    ['TELEGRAM_BOT_TOKEN=t', 'OWNER_ID=nope'],
+  ]) {
+    assert.equal(refused(lines), MISCONFIG_MESSAGE, lines.join(' | '));
+  }
+});
+
+// -------------------------------------------------------------- options ---
+
+test('an env file with nothing but credentials prefaults every option', () => {
+  const config = ok(CREDS);
+  assert.deepEqual(config, {
+    token: '123456:TEST-TOKEN',
+    ownerId: 424242,
+    apiBaseUrl: DEFAULT_API_BASE_URL,
+    claudeTimeoutMs: DEFAULT_CLAUDE_TIMEOUT_MS,
+    maxParallelTurns: DEFAULT_MAX_PARALLEL_TURNS,
+    burstSettleMs: DEFAULT_BURST_SETTLE_MS,
+    burstWindowMaxMs: DEFAULT_BURST_WINDOW_MAX_MS,
+    claudeModel: DEFAULT_CLAUDE_MODEL,
+    claudeEffort: DEFAULT_CLAUDE_EFFORT,
+    claudeFallbackModel: DEFAULT_CLAUDE_FALLBACK_MODEL,
+    claudeFallbackTtlMs: DEFAULT_CLAUDE_FALLBACK_TTL_MS,
+    locale: DEFAULT_LOCALE,
+    flushWords: [...DEFAULT_FLUSH_WORDS],
+  });
+});
+
+// --------------------------------------------------------------- stage S2 ---
+
+test('TG_LOCALE: file, process env over file, and a typo that falls back', () => {
+  assert.equal(SOURCES.TG_LOCALE, 'process-env-over-file');
+  assert.equal(ok([...CREDS]).locale, 'en', 'unset is English — the new default');
+  assert.equal(ok([...CREDS, 'TG_LOCALE=ru']).locale, 'ru');
+  assert.equal(ok([...CREDS, 'TG_LOCALE=ru'], { TG_LOCALE: 'en' }).locale, 'en');
+  assert.equal(
+    ok([...CREDS, 'TG_LOCALE=klingon']).locale,
+    DEFAULT_LOCALE,
+    'an unknown locale is a cosmetic typo, not a reason to refuse to start'
+  );
+});
+
+test('resolveLocale reads the same file with the same precedence, without credentials', () => {
+  fs.writeFileSync(envFile, 'TG_LOCALE=ru\n');
+  assert.equal(resolveLocale({ envFile, processEnv: {} }), 'ru', 'no token needed: status.mjs has none');
+  assert.equal(resolveLocale({ envFile, processEnv: { TG_LOCALE: 'en' } }), 'en');
+  assert.equal(
+    resolveLocale({ envFile: path.join(dir, 'nope'), processEnv: {} }),
+    DEFAULT_LOCALE,
+    'a missing env file is the default locale, not a throw'
+  );
+  // ...and the two paths cannot disagree.
+  assert.equal(resolveLocale({ envFile, processEnv: {} }), ok([...CREDS, 'TG_LOCALE=ru']).locale);
+});
+
+test('TG_FLUSH_WORDS: comma-separated, trimmed, lowercased, overridable', () => {
+  assert.equal(SOURCES.TG_FLUSH_WORDS, 'process-env-over-file');
+  assert.deepEqual(ok([...CREDS, 'TG_FLUSH_WORDS= GO , Answer ,,go']).flushWords, [
+    'go',
+    'answer',
+    'go',
+  ]);
+  assert.deepEqual(ok([...CREDS, 'TG_FLUSH_WORDS=']).flushWords, [], 'no flush words is a choice');
+  assert.deepEqual(ok([...CREDS, 'TG_FLUSH_WORDS=x'], { TG_FLUSH_WORDS: 'y' }).flushWords, ['y']);
+});
+
+test('the flush-word default is exactly the list runner.mjs carried', () => {
+  // The words are input, not output: every one of them must survive the move
+  // into configuration, including the two spellings of "всё".
+  assert.deepEqual(
+    [...DEFAULT_FLUSH_WORDS],
+    ['читай', 'прочитай', 'ответь', 'отвечай', 'го', 'go', 'answer', 'всё', 'все']
+  );
+});
+
+test('the operator seams take the process env first and the file second', () => {
+  for (const name of [
+    'TG_API_BASE_URL',
+    'TG_CLAUDE_TIMEOUT_MS',
+    'TG_MAX_PARALLEL_TURNS',
+    // The fallback pair is a seam too: it is what an operator reaches for when
+    // one model's bucket runs dry, and the launchd job reads the env FILE.
+    'TG_CLAUDE_FALLBACK_MODEL',
+    'TG_CLAUDE_FALLBACK_TTL_MS',
+  ] as const) {
+    assert.equal(SOURCES[name], 'process-env-over-file');
+  }
+  const FILE = [
+    ...CREDS,
+    'TG_API_BASE_URL=http://127.0.0.1:9',
+    'TG_CLAUDE_TIMEOUT_MS=120000',
+    'TG_MAX_PARALLEL_TURNS=5',
+    'TG_CLAUDE_FALLBACK_MODEL=sonnet',
+    'TG_CLAUDE_FALLBACK_TTL_MS=900000',
+  ];
+  const fromFile = ok(FILE);
+  assert.equal(fromFile.apiBaseUrl, 'http://127.0.0.1:9');
+  assert.equal(fromFile.claudeTimeoutMs, 120000, 'strings coerce to numbers');
+  assert.equal(fromFile.maxParallelTurns, 5);
+  assert.equal(fromFile.claudeFallbackModel, 'sonnet');
+  assert.equal(fromFile.claudeFallbackTtlMs, 900000);
+
+  const overridden = ok(FILE, {
+    TG_API_BASE_URL: 'http://127.0.0.1:1',
+    TG_CLAUDE_TIMEOUT_MS: '1000',
+    TG_MAX_PARALLEL_TURNS: '1',
+    TG_CLAUDE_FALLBACK_MODEL: 'opus',
+    TG_CLAUDE_FALLBACK_TTL_MS: '60000',
+  });
+  assert.equal(overridden.apiBaseUrl, 'http://127.0.0.1:1');
+  assert.equal(overridden.claudeTimeoutMs, 1000);
+  assert.equal(overridden.maxParallelTurns, 1);
+  assert.equal(overridden.claudeFallbackModel, 'opus');
+  assert.equal(overridden.claudeFallbackTtlMs, 60000);
+});
+
+// ------------------------------------------------- the usage-limit fallback ---
+
+test('the fallback model defaults to opus and can be switched off', () => {
+  assert.equal(DEFAULT_CLAUDE_FALLBACK_MODEL, 'opus');
+  assert.equal(DEFAULT_CLAUDE_FALLBACK_TTL_MS, 60 * 60 * 1000);
+  assert.equal(ok(CREDS).claudeFallbackModel, 'opus', 'unset: fable falls back to opus');
+  assert.equal(ok(CREDS).claudeFallbackTtlMs, DEFAULT_CLAUDE_FALLBACK_TTL_MS);
+
+  assert.equal(
+    ok([...CREDS, 'TG_CLAUDE_FALLBACK_MODEL=']).claudeFallbackModel,
+    null,
+    'an empty value is how an operator says "report the failure, do not switch"'
+  );
+  assert.equal(ok([...CREDS, 'TG_CLAUDE_FALLBACK_MODEL=   ']).claudeFallbackModel, null);
+});
+
+test('a fallback that IS the primary model is no fallback at all', () => {
+  assert.equal(
+    ok([...CREDS, 'TG_CLAUDE_FALLBACK_MODEL=opus'], { TG_CLAUDE_MODEL: 'opus' }).claudeFallbackModel,
+    null,
+    're-running the same empty bucket is a second failure, not a fallback'
+  );
+  assert.equal(
+    ok([...CREDS, 'TG_CLAUDE_FALLBACK_MODEL=fable'], { TG_CLAUDE_MODEL: 'opus' }).claudeFallbackModel,
+    'fable',
+    'a different model is still a fallback, whichever way round'
+  );
+});
+
+test('a nonsense fallback TTL falls back to the default, like every other number', () => {
+  for (const raw of ['abc', '', '0', '-1']) {
+    assert.equal(
+      ok(CREDS, { TG_CLAUDE_FALLBACK_TTL_MS: raw }).claudeFallbackTtlMs,
+      DEFAULT_CLAUDE_FALLBACK_TTL_MS,
+      raw
+    );
+  }
+});
+
+test('the burst knobs and the model pair are process-env only', () => {
+  for (const name of [
+    'TG_BURST_SETTLE_MS',
+    'TG_BURST_WINDOW_MAX_MS',
+    'TG_CLAUDE_MODEL',
+    'TG_CLAUDE_EFFORT',
+  ] as const) {
+    assert.equal(SOURCES[name], 'process-env');
+  }
+  const ignored = ok([
+    ...CREDS,
+    'TG_BURST_SETTLE_MS=1',
+    'TG_BURST_WINDOW_MAX_MS=2',
+    'TG_CLAUDE_MODEL=opus',
+    'TG_CLAUDE_EFFORT=low',
+  ]);
+  assert.equal(ignored.burstSettleMs, DEFAULT_BURST_SETTLE_MS, 'the env file never set these');
+  assert.equal(ignored.burstWindowMaxMs, DEFAULT_BURST_WINDOW_MAX_MS);
+  assert.equal(ignored.claudeModel, DEFAULT_CLAUDE_MODEL);
+  assert.equal(ignored.claudeEffort, DEFAULT_CLAUDE_EFFORT);
+
+  const honoured = ok(CREDS, {
+    TG_BURST_SETTLE_MS: '1',
+    TG_BURST_WINDOW_MAX_MS: '2',
+    TG_CLAUDE_MODEL: 'opus',
+    TG_CLAUDE_EFFORT: 'low',
+  });
+  assert.equal(honoured.burstSettleMs, 1);
+  assert.equal(honoured.burstWindowMaxMs, 2);
+  assert.equal(honoured.claudeModel, 'opus');
+  assert.equal(honoured.claudeEffort, 'low');
+});
+
+test('a nonsense timeout or parallelism falls back instead of stopping the daemon', () => {
+  for (const raw of ['abc', '', '0', '-1']) {
+    assert.equal(ok(CREDS, { TG_CLAUDE_TIMEOUT_MS: raw }).claudeTimeoutMs, DEFAULT_CLAUDE_TIMEOUT_MS, raw);
+  }
+  for (const raw of ['abc', '', '0', '2.5', '-3']) {
+    assert.equal(
+      ok(CREDS, { TG_MAX_PARALLEL_TURNS: raw }).maxParallelTurns,
+      DEFAULT_MAX_PARALLEL_TURNS,
+      raw
+    );
+  }
+});
+
+test('a nonsense burst knob stays NaN, exactly as the bare Number() left it', () => {
+  assert.ok(Number.isNaN(ok(CREDS, { TG_BURST_SETTLE_MS: 'abc' }).burstSettleMs));
+  assert.equal(ok(CREDS, { TG_BURST_SETTLE_MS: '' }).burstSettleMs, 0, "Number('') is 0, not a fallback");
+});
+
+// ------------------------------------------------------------- the pins ---
+
+// config.ts cannot import turn.mjs (no allowJs), so the timeout default and the
+// leniency around it are a deliberate parallel copy. Pin them here so the two
+// cannot drift apart silently.
+const turn = (await import(new URL('../src/turn.mjs', import.meta.url).href)) as {
+  DEFAULT_CLAUDE_TIMEOUT_MS: number;
+  parseTimeoutMs: (raw: unknown, fallback?: number) => number;
+};
+
+test('the timeout default and its leniency still match turn.mjs', () => {
+  assert.equal(DEFAULT_CLAUDE_TIMEOUT_MS, turn.DEFAULT_CLAUDE_TIMEOUT_MS);
+  for (const raw of ['120000', '1', 'abc', '', '0', '-1', 'Infinity']) {
+    assert.equal(
+      ok(CREDS, { TG_CLAUDE_TIMEOUT_MS: raw }).claudeTimeoutMs,
+      turn.parseTimeoutMs(raw),
+      `TG_CLAUDE_TIMEOUT_MS=${raw}`
+    );
+  }
+});
+
+// The two refusals themselves are pinned end to end by the contract oracle
+// (test/contract/runner-e2e.test.mjs cases (a) and (a2), which run the real
+// daemon and compare stderr byte for byte). What is checked here is only that
+// the DAEMON still owns the wording it prints — src/runner.ts since the daemon
+// became the plugin's service; src/runner.mjs is the boot file now, and the one
+// thing it must never do is turn a load failure into the same quiet exit 0
+// (test/contract/runner-boot.test.mjs).
+test('the daemon still prints both misconfig sentences itself', () => {
+  const runner = fs.readFileSync(path.join(SRC, 'runner.ts'), 'utf8');
+  assert.match(runner, /refusing to start \(see orchestrator\/README\.md\)/);
+  assert.match(runner, /stderr\(loaded\.message\)/);
+  assert.match(runner, /exit\(0\)/);
+});

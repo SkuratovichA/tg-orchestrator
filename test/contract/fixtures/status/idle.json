@@ -1,0 +1,71 @@
+{
+  "daemon": {
+    "up": true,
+    "pid": "<pid>",
+    "etime": "<t>"
+  },
+  "status": {
+    "phase": "idle",
+    "at": "<ts>",
+    "pid": "<pid>"
+  },
+  "calls": [],
+  "pending": null,
+  "sessions": {
+    "-1007770001:9": {
+      "id": "sess-old",
+      "last": "<ms>"
+    },
+    "-1007770001:5": {
+      "id": "sess-1",
+      "last": "<ms>"
+    }
+  },
+  "usage": {
+    "today": {
+      "calls": 2,
+      "fails": 1,
+      "cost": 0.35,
+      "avgMs": 85000,
+      "maxMs": 125000
+    },
+    "week": {
+      "calls": 3,
+      "fails": 1,
+      "cost": 1.85,
+      "avgMs": 2556666.6666666665,
+      "maxMs": 7500000
+    },
+    "last": [
+      {
+        "ts": "<ts>",
+        "ok": false,
+        "convo": "-1007770001:9",
+        "costUSD": 0.1,
+        "durationMs": "<dur>"
+      },
+      {
+        "ts": "<ts>",
+        "ok": true,
+        "convo": "-1007770001:5",
+        "costUSD": 0.25,
+        "durationMs": "<dur>"
+      },
+      {
+        "ts": "<ts>",
+        "ok": true,
+        "convo": "-1007770001:5",
+        "costUSD": 1.5,
+        "durationMs": "<dur>"
+      }
+    ]
+  },
+  "log": [
+    "<t> burst window opened",
+    "<t> burst window opened",
+    "<t> claude start [-1007770001:5]",
+    "<t> claude ok [-1007770001:5]: готово",
+    "<t> snapshot written",
+    "<t> idle"
+  ]
+}

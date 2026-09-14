@@ -1,0 +1,8 @@
+session aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+account personal · project /opt/demo/git/demo · last activity 2026-01-02T03:04:05.000Z
+
+── opening prompt ──
+Fix the deploy script for the staging cluster
+
+── last assistant reply (tail) ──
+Deploy script fixed and staging is green.

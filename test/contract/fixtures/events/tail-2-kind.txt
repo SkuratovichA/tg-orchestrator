@@ -1,0 +1,2 @@
+     4  <ts>  inbound         -100777:5              502  {"message_id":502,"text":"ещё"}
+     5  <ts>  wake_posted     -100777:5                -  {"job":"whisper msg 380","kind":"voice-transcript","ok":true,"file":null}

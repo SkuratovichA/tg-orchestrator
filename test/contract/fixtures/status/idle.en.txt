@@ -1,0 +1,20 @@
+tg-orchestrator · <t>
+
+Daemon    🟢 pid <pid>, uptime <t>
+Phase     idle — waiting for messages (since <t>)
+Telegram  undelivered on the server: —
+Sessions  2 topics with context · freshest -1007770001:5 (2h15m ago)
+
+Usage     today:  2 calls · $0.35 · avg 1m25s · max 2m05s · 1 failed
+          7 days: 3 calls · $1.85 · avg 42m37s · max 2h5m · 1 failed
+          <t> FAIL $0.10  2m05s -1007770001:9
+          <t> ok  $0.25    45s -1007770001:5
+          <t> ok  $1.50   2h5m -1007770001:5
+
+Log       latest events:
+          <t> burst window opened
+          <t> burst window opened
+          <t> claude start [-1007770001:5]
+          <t> claude ok [-1007770001:5]: готово
+          <t> snapshot written
+          <t> idle

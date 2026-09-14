@@ -1,16 +1,37 @@
 {
-  "name": "tg-orchestrator",
+  "name": "@tagents/plugin-telegram",
   "version": "0.1.0",
   "description": "Personal Claude Code orchestrator over Telegram forum topics: one session per topic, parallel turns, a wake spool for background jobs, a message-claim registry",
   "type": "module",
   "license": "MIT",
+  "private": true,
+  "exports": {
+    ".": "./src/plugin.ts"
+  },
+  "tagents": {
+    "apiVersion": 1,
+    "entry": "./src/plugin.ts"
+  },
+  "packageManager": "pnpm@9.15.4",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.18"
   },
   "scripts": {
     "start": "node src/runner.mjs",
     "status": "node src/status.mjs",
-    "test": "node --test test/*.test.mjs",
-    "check": "for f in src/*.mjs test/*.mjs; do node --check \"$f\" || exit 1; done; for f in ensure.sh scripts/*.sh; do bash -n \"$f\" || exit 1; done"
+    "pretest": "test -f node_modules/@tagents/core/dist/index.js || { echo 'build @tagents/core first: pnpm -C ../../tagents/packages/core build' >&2; exit 1; }",
+    "test": "node --test \"test/**/*.test.mjs\" \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "check": "for f in src/*.mjs test/*.mjs test/contract/*.mjs; do [ -f \"$f\" ] || continue; node --check \"$f\" || exit 1; done; for f in ensure.sh scripts/*.sh; do bash -n \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "@tagents/core": "github:SkuratovichA/tagents#path:/packages/core",
+    "i18next": "^26.4",
+    "ts-pattern": "^5.9",
+    "zod": "^4.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "7.0.2"
   }
 }

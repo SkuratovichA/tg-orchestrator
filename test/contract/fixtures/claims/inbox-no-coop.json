@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "error": "coop.sh not found at <TMP>/git/work/claude-coop/coop.sh — set CLAIMS_COOP to your claude-coop checkout"
+}

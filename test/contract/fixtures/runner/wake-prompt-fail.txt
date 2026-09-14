@@ -1,0 +1,16 @@
+Background job finished — this is NOT a new message from the owner.
+Now: <ts>
+A previous turn of yours in this topic started this job and told the owner
+it would report back. Finish that promise now: act on the result and answer
+in the topic via the Bot API. The owner has heard nothing since.
+Job: whisper msg 380 (kind=voice-transcript, ok=false)
+Started: <ts>
+Finished: <ts>
+Output file: /tmp/tg-voice-380/voice.txt
+
+The job FAILED. Error output:
+
+ffmpeg exited 1
+
+Tell the owner it failed and what you are doing about it. Retry at most
+once, and only if the error looks transient.

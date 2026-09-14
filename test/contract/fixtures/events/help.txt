@@ -1,0 +1,14 @@
+events.mjs — the orchestrator's durable event log (exit 0 ok, 1 error, 2 usage)
+
+  tail [N] [--convo K] [--kind K]      last N events (default 50)
+  trace <msg_id> [--convo K]           everything that touched that message
+  orphans                              inbound messages nothing ever closed
+  sessions                             {offset, sessions} projected from the log
+  rebuild [--write] [--force]          derive state.json; --write replaces it
+  snapshot                             record a snapshot event from state.json
+  append <kind> [--convo K] [--msg-id N] [--update-id N] [--json '{...}'] [--actor NAME]
+
+  --json                               raw JSON lines instead of columns
+
+Closing kinds (what accounts for an inbound message): turn_result, turn_fail, command, flush_word, skipped
+DB: <TMP>/help.sqlite

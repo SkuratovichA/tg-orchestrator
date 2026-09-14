@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "chat_id": -100123,
+  "owner": "orchestrator",
+  "acquired": [
+    {
+      "message_id": 501
+    }
+  ],
+  "busy": [],
+  "chat_owner": null
+}

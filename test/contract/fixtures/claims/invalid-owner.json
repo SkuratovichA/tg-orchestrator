@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "error": "owner must match /^[a-z0-9][a-z0-9_-]*$/ (lowercase letters, digits, - and _), got 'BadName'"
+}

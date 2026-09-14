@@ -1,0 +1,3 @@
+Personal orchestrator. Write or record a voice note — what is happening in a project, where some script lives, what I did about X, create a topic, send a file, run something.
+Messages pile up until you stay quiet for 3 min, so you can write in a series. Done sooner? Send a flush word as its own message (TG_FLUSH_WORDS): the window closes at once and the word itself never reaches the agent.
+/reset — clear this topic, /status — is the daemon alive

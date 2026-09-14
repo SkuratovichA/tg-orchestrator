@@ -1,0 +1,3 @@
+<ts> drain requested — 0 turn(s) in flight, 0 queued; taking no new work
+<ts> drained — exiting for restart
+<ts> drain — shutting down

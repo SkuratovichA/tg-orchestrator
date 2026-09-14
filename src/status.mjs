@@ -9,6 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { DEFAULT_API_BASE_URL, parseEnvFile, resolveLocale } from './config.ts';
+import { getI18n, t } from './i18n/index.ts';
 
 const CFG_DIR = path.join(os.homedir(), '.config', 'tg-orchestrator');
 const ENV_FILE = path.join(CFG_DIR, 'env');
@@ -25,6 +27,10 @@ const TRANSCRIPTS = path.join(
   'projects',
   os.homedir().replace(/[/.]/g, '-')
 );
+
+// Same file, same variable, same precedence as the daemon: a status screen in
+// a different language from the topic it describes would be its own bug.
+getI18n(resolveLocale({ envFile: ENV_FILE }));
 
 const readJson = (f) => {
   try {
@@ -43,9 +49,11 @@ const alive = (pid) => {
 };
 const fmtDur = (ms) => {
   const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}с`;
+  if (s < 60) return t('duration.seconds', { s });
   const m = Math.floor(s / 60);
-  return m < 60 ? `${m}м${String(s % 60).padStart(2, '0')}с` : `${Math.floor(m / 60)}ч${m % 60}м`;
+  return m < 60
+    ? t('duration.minutes', { m, s: String(s % 60).padStart(2, '0') })
+    : t('duration.hours', { h: Math.floor(m / 60), m: m % 60 });
 };
 const fmtLocal = (iso) =>
   new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -74,7 +82,12 @@ function claudeCalls() {
   }
   // Our claude children carry `--append-system-prompt-file <repo>/agent.md`,
   // so the repo root (not src/) is what identifies them in ps output.
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+  // TG_ORCHESTRATOR_ROOT overrides the root to match — the contract oracle
+  // sets it to a per-test path so the production daemon's live calls never
+  // show up in a test snapshot; nothing else sets it.
+  const root =
+    process.env.TG_ORCHESTRATOR_ROOT ??
+    path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
   return out
     .split('\n')
     .filter((l) => l.includes('claude -p') && l.includes(root))
@@ -129,19 +142,19 @@ function transcriptPeek(sessionId) {
 // --- telegram-side queue ------------------------------------------------------
 async function pendingUpdates() {
   try {
-    const env = Object.fromEntries(
-      fs
-        .readFileSync(ENV_FILE, 'utf8')
-        .split('\n')
-        .filter((l) => l.includes('='))
-        .map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()])
-    );
+    // The env file is parsed with the daemon's own grammar (config.ts), so the
+    // two tools can never disagree about what a line in it means.
+    const env = parseEnvFile(fs.readFileSync(ENV_FILE, 'utf8'));
+    // Bot API root, resolved exactly the way runner.mjs resolves it: the
+    // process environment first, the env file second, the real API last. The
+    // override exists so the contract tests can point this call at a local
+    // fake instead of api.telegram.org — nothing else reads it.
+    const base = process.env.TG_API_BASE_URL ?? env.TG_API_BASE_URL ?? DEFAULT_API_BASE_URL;
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 5000);
-    const res = await fetch(
-      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getWebhookInfo`,
-      { signal: ctl.signal }
-    ).finally(() => clearTimeout(t));
+    const res = await fetch(`${base}/bot${env.TELEGRAM_BOT_TOKEN}/getWebhookInfo`, {
+      signal: ctl.signal,
+    }).finally(() => clearTimeout(t));
     return (await res.json()).result?.pending_update_count ?? null;
   } catch {
     return null;
@@ -223,59 +236,95 @@ function render(s) {
   L.push('');
   L.push(
     s.daemon.up
-      ? `Демон     🟢 pid ${s.daemon.pid}, аптайм ${s.daemon.etime}`
-      : `Демон     🔴 НЕ ЗАПУЩЕН (ensure.sh поднимет за ≤5 мин, или запусти руками)`
+      ? t('statusCli.daemonUp', { pid: s.daemon.pid, etime: s.daemon.etime })
+      : t('statusCli.daemonDown')
   );
   if (s.status) {
     const ph = s.status.phase;
     const turns = s.status.turns ?? [];
-    const queued = s.status.queued ? `, в очереди ${s.status.queued}` : '';
+    const queued = s.status.queued ? t('statusCli.queued', { queued: s.status.queued }) : '';
     const desc =
       ph === 'idle'
-        ? `idle — жду сообщений (с ${fmtLocal(s.status.at)})`
+        ? t('statusCli.phaseIdle', { at: fmtLocal(s.status.at) })
         : ph === 'burst'
-          ? `burst — копится пачка: ${s.status.msgs} сообщ., окно открыто ${ago(s.status.since ?? s.status.at)}`
+          ? t('statusCli.phaseBurst', {
+              msgs: s.status.msgs,
+              age: ago(s.status.since ?? s.status.at),
+            })
           : ph === 'draining'
-            ? `draining — доделываю ${turns.length} ход(а)${queued}, новых не беру, потом выйду для рестарта`
+            ? t('statusCli.phaseDraining', { turns: turns.length, queued })
             : ph === 'claude'
             ? turns.length > 1
-              ? `claude — ${turns.length} хода параллельно${queued}`
-              : `claude — обрабатываю ${s.status.convo} (${s.status.msgs} сообщ.), уже ${ago(s.status.at)}${queued}`
-            : `${ph} (${fmtLocal(s.status.at)})`;
-    const stale = s.daemon.up && s.status.pid !== s.daemon.pid ? ' ⚠️ (от старого pid)' : '';
-    L.push(`Фаза      ${desc}${stale}`);
+              ? t('statusCli.phaseClaudeParallel', { turns: turns.length, queued })
+              : t('statusCli.phaseClaudeOne', {
+                  convo: s.status.convo,
+                  msgs: s.status.msgs,
+                  age: ago(s.status.at),
+                  queued,
+                })
+            : t('statusCli.phaseOther', { phase: ph, at: fmtLocal(s.status.at) });
+    const stale = s.daemon.up && s.status.pid !== s.daemon.pid ? t('statusCli.stalePid') : '';
+    L.push(t('statusCli.phaseLine', { desc, stale }));
     if (turns.length > 1 || ph === 'draining')
-      for (const t of turns)
-        L.push(`Ход       ${t.key} · ${t.kind === 'wake' ? 'wake-задача' : `${t.size} сообщ.`} · уже ${ago(t.since)}`);
+      for (const turn of turns)
+        L.push(
+          t('statusCli.turnLine', {
+            key: turn.key,
+            what:
+              turn.kind === 'wake'
+                ? t('statusCli.turnWake')
+                : t('statusCli.turnMsgs', { size: turn.size }),
+            age: ago(turn.since),
+          })
+        );
     if (ph === 'claude' && s.status.burst)
-      L.push(`          + копится пачка: ${s.status.burst.msgs} сообщ., окно открыто ${ago(s.status.burst.since)}`);
+      L.push(
+        t('statusCli.burstAlso', {
+          msgs: s.status.burst.msgs,
+          age: ago(s.status.burst.since),
+        })
+      );
   }
   for (const c of s.calls) {
-    L.push(`Вызов     claude pid ${c.pid} · elapsed ${c.etime} · cpu ${c.cpu}%`);
+    L.push(t('statusCli.callLine', { pid: c.pid, etime: c.etime, cpu: c.cpu }));
     const peek = transcriptPeek(c.resume);
     if (peek) L.push(`          ${peek}`);
   }
-  if (s.status?.phase === 'claude' && !s.calls.length)
-    L.push(`Вызов     ⚠️ фаза claude, но процесса нет — вероятно, раннер убит посреди вызова`);
+  if (s.status?.phase === 'claude' && !s.calls.length) L.push(t('statusCli.callMissing'));
   L.push(
-    `Telegram  недоставленных на сервере: ${s.pending ?? '—'}${s.pending ? ' ⚠️ (ждут, пока демон освободится/проснётся)' : ''}`
+    t('statusCli.pendingLine', {
+      pending: s.pending ?? '—',
+      waiting: s.pending ? t('statusCli.pendingWaiting') : '',
+    })
   );
   const sess = Object.entries(s.sessions).sort((a, b) => (b[1].last ?? 0) - (a[1].last ?? 0));
   if (sess.length) {
     const [k, v] = sess[0];
-    L.push(`Сессии    ${sess.length} топиков с контекстом · свежайшая ${k} (${fmtDur(Date.now() - v.last)} назад)`);
+    L.push(
+      t('statusCli.sessionsLine', {
+        topics: sess.length,
+        key: k,
+        age: fmtDur(Date.now() - v.last),
+      })
+    );
   }
   L.push('');
   const u = (r) =>
-    `${r.calls} вызовов · $${r.cost.toFixed(2)} · ср ${fmtDur(r.avgMs)} · макс ${fmtDur(r.maxMs)}${r.fails ? ` · ошибок ${r.fails}` : ''}`;
-  L.push(`Usage     сегодня: ${u(s.usage.today)}`);
-  L.push(`          7 дней:  ${u(s.usage.week)}`);
+    t('statusCli.usageRoll', {
+      calls: r.calls,
+      cost: r.cost.toFixed(2),
+      avg: fmtDur(r.avgMs),
+      max: fmtDur(r.maxMs),
+      fails: r.fails ? t('statusCli.usageFails', { fails: r.fails }) : '',
+    });
+  L.push(t('statusCli.usageToday', { roll: u(s.usage.today) }));
+  L.push(t('statusCli.usageWeek', { roll: u(s.usage.week) }));
   for (const r of s.usage.last)
     L.push(
       `          ${fmtLocal(r.ts)} ${r.ok ? 'ok ' : 'FAIL'} $${(r.costUSD ?? 0).toFixed(2)} ${fmtDur(r.durationMs ?? 0).padStart(6)} ${r.convo}`
     );
   L.push('');
-  L.push('Лог       последние события:');
+  L.push(t('statusCli.logHeading'));
   for (const l of s.log) L.push(`          ${l}`);
   return L.join('\n');
 }

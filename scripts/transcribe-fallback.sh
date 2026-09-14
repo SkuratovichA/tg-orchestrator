@@ -44,41 +44,26 @@ report() {
 trap report EXIT
 
 STAGE="download (telethon)"
-"$PY" - "$CHAT_ID" "$MSG_ID" "$WORK/voice.ogg" "$MCP_REPO/.env" >> "$WORK/run.log" 2>&1 <<'PY'
-import asyncio, os, sys
-from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-
-chat_id, msg_id, out = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-load_dotenv(sys.argv[4])
-
-
-async def main():
-    cl = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING_PERSONAL"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"],
-    )
-    await cl.start()
-    # get_input_entity, not get_entity — otherwise Telethon raises a bogus
-    # PeerIdInvalidError because the peer never gets resolved.
-    peer = await cl.get_input_entity(chat_id)
-    msg = (await cl.get_messages(peer, ids=[msg_id]))[0]
-    if msg is None:
-        raise SystemExit(f"message {msg_id} not found in {chat_id}")
-    if not msg.voice and not msg.video_note and not msg.audio:
-        raise SystemExit(f"message {msg_id} carries no voice/audio")
-    await cl.download_media(msg, file=out)
-    await cl.disconnect()
-
-
-asyncio.run(main())
-PY
+"$PY" "$HERE/tg-download-voice.py" "$CHAT_ID" "$MSG_ID" "$WORK/voice.ogg" "$MCP_REPO/.env" >> "$WORK/run.log" 2>&1
 
 STAGE="ffmpeg decode"
 ffmpeg -y -loglevel error -i "$WORK/voice.ogg" -ar 16000 -ac 1 -c:a pcm_s16le "$WORK/voice.wav" \
   >> "$WORK/run.log" 2>&1
+
+STAGE="route by duration"
+# One mlx-whisper stream leaves most of the GPU idle, and on a long note that
+# turns into minutes the calling turn does not have. Anything past the
+# threshold goes to the parallel path; transcribe-chunked.sh reuses the
+# voice.ogg already downloaded above, so the handoff costs one ffmpeg decode.
+DUR="$(python3 -c 'import wave,sys; w=wave.open(sys.argv[1]); print(int(w.getnframes()/w.getframerate()))' "$WORK/voice.wav")"
+echo "duration=${DUR}s threshold=${CHUNK_THRESHOLD_SEC:-180}s" >> "$WORK/run.log"
+if [ "$DUR" -gt "${CHUNK_THRESHOLD_SEC:-180}" ]; then
+  # Clear our own trap first: the chunked script installs its own reporter, and
+  # two reporters on one job wake the topic twice for the same transcript.
+  DONE=true
+  trap - EXIT
+  exec "$HERE/transcribe-chunked.sh" "$CHAT_ID" "$MSG_ID" ${CONVO:+"$CONVO"}
+fi
 
 STAGE="mlx-whisper"
 uvx --from mlx-whisper mlx_whisper \

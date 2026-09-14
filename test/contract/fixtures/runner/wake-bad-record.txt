@@ -1,0 +1,1 @@
+⚠️ Битая запись в wake-спуле: 20260911T120400-4242-job.json (Unexpected end of JSON input)

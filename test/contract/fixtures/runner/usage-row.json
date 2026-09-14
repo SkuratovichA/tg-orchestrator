@@ -1,0 +1,14 @@
+{
+  "ts": "<ts>",
+  "kind": "tg-orchestrator",
+  "ok": true,
+  "convo": "-1007770001:5",
+  "sessionId": "sess-1",
+  "resumedFrom": null,
+  "costUSD": 0.25,
+  "numTurns": 3,
+  "durationMs": "<dur>",
+  "toolUses": 1,
+  "timedOut": false,
+  "killedAfterResult": false
+}

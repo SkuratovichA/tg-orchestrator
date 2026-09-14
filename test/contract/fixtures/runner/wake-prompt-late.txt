@@ -1,0 +1,17 @@
+Background job finished — this is NOT a new message from the owner.
+Now: <ts>
+A previous turn of yours in this topic started this job and told the owner
+it would report back. Finish that promise now: act on the result and answer
+in the topic via the Bot API. The owner has heard nothing since.
+Job: whisper msg 380 (kind=voice-transcript, ok=true)
+Started: <ts>
+Finished: <ts>
+Output file: /tmp/tg-voice-380/voice.txt
+
+LATE: this result waited <min> min before reaching you.
+Say so plainly in your answer instead of pretending it is fresh.
+
+Result:
+
+расшифровка голосового
+вторая строка

@@ -1,0 +1,262 @@
+[
+  {
+    "file": "src/config.ts",
+    "text": "'читай'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'прочитай'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'ответь'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'отвечай'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'го'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'всё'"
+  },
+  {
+    "file": "src/config.ts",
+    "text": "'все'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Личный оркестратор. Пиши текстом или голосом — что происходит в проектах, где какой скрипт, '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'что я делал по теме X, создай топик, отправь файл, запусти что-то.\\n'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Сообщения копятся, пока ты не замолчишь на {{settleMin}} мин — можно писать серией. '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Закончил мысль раньше — отдельным сообщением «читай» (ещё: го, ответь, всё, /answer): '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'окно закрывается сразу, само слово в агента не уходит.\\n'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'/reset — сбросить контекст топика · /status — жив ли демон'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⏳ Ход идёт дольше обычного: уже {{elapsedMin}} мин. '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Через {{leftMin}} мин прерву его по таймауту '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'(лимит {{limitMin}} мин, TG_CLAUDE_TIMEOUT_MS).'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Не смог обработать: {{error}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ У {{from}} кончились usage credits — этот ход и следующие идут на {{to}}. '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Снова попробую {{from}} через {{ttlMin}} мин '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'✅ {{model}} снова отвечает — вернулся на неё.'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'🔄 Контекст сброшен. Текущий ход дойдёт на старом контексте, следующий начнётся с чистого листа.'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'🔄 Контекст этого топика сброшен.'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'🟢 живой: pid {{pid}}, аптайм {{uptimeMin}} мин, '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'топиков с контекстом: {{topics}}{{usage}}{{busy}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'сегодня: {{calls}} вызовов, ${{cost}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'сегодня: {{calls}} вызовов, ${{cost}}, ошибок: {{fails}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'в работе: {{keys}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'в работе: {{keys}}, в очереди {{queued}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'модель: {{model}} (фолбэк — у {{primary}} кончились usage credits)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Фоновая задача «{{job}}» упала, но я не смог её обработать. Сырой результат:'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Фоновая задача «{{job}}» закончилась, но я не смог её обработать. Сырой результат:'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'(пусто)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Полный вывод: {{file}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Битая запись в wake-спуле: {{file}} ({{error}})'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Запись в wake-спуле без адреса (convo={{convo}}): «{{job}}». '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Лежит в wake/done/{{file}}.bad'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⚠️ Сообщение {{msgId}} от {{at}} осталось без ответа '"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'после падения раннера и слишком старое для автоповтора — напиши ещё раз, если актуально.'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'{{s}}с'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'{{m}}м{{s}}с'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'{{h}}ч{{m}}м'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Демон     🟢 pid {{pid}}, аптайм {{etime}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Демон     🔴 НЕ ЗАПУЩЕН (ensure.sh поднимет за ≤5 мин, или запусти руками)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Фаза      {{desc}}{{stale}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'idle — жду сообщений (с {{at}})'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'burst — копится пачка: {{msgs}} сообщ., окно открыто {{age}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'draining — доделываю {{turns}} ход(а){{queued}}, новых не беру, потом выйду для рестарта'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'claude — {{turns}} хода параллельно{{queued}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'claude — обрабатываю {{convo}} ({{msgs}} сообщ.), уже {{age}}{{queued}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "', в очереди {{queued}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "' ⚠️ (от старого pid)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Ход       {{key}} · {{what}} · уже {{age}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'wake-задача'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'{{size}} сообщ.'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'          + копится пачка: {{msgs}} сообщ., окно открыто {{age}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Вызов     claude pid {{pid}} · elapsed {{etime}} · cpu {{cpu}}%'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Вызов     ⚠️ фаза claude, но процесса нет — вероятно, раннер убит посреди вызова'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Telegram  недоставленных на сервере: {{pending}}{{waiting}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "' ⚠️ (ждут, пока демон освободится/проснётся)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Сессии    {{topics}} топиков с контекстом · свежайшая {{key}} ({{age}} назад)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'{{calls}} вызовов · ${{cost}} · ср {{avg}} · макс {{max}}{{fails}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "' · ошибок {{fails}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Usage     сегодня: {{roll}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'          7 дней:  {{roll}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Лог       последние события:'"
+  }
+]

@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "now": "<ts>",
+  "db": "<db>",
+  "claims": [
+    {
+      "chat_id": -100123,
+      "message_id": 777,
+      "owner": "orchestrator",
+      "pid": null,
+      "alive": null,
+      "note": "in-turn",
+      "claimed_at": "<ts>",
+      "age": "<dur>"
+    }
+  ],
+  "leases": [
+    {
+      "chat_id": -100123,
+      "thread_id": 3,
+      "state": "held",
+      "reason": null,
+      "owner": "watcher",
+      "pid": null,
+      "alive": null,
+      "inbox": "coop:watcher",
+      "note": null,
+      "status": "held",
+      "leased_at": "<ts>",
+      "age": "<dur>",
+      "expires_at": "<ts>",
+      "expires_in": "<dur>",
+      "released_at": null
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+refusing to write <HOME>/.config/tg-orchestrator/state.json: runner pid <pid> is alive and would overwrite it.
+Stop the daemon first, or pass --force if you know what you are doing.

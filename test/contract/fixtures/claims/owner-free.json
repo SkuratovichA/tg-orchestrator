@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "state": "free",
+  "reason": "released (done)",
+  "owner": "orchestrator",
+  "pid": null,
+  "alive": null,
+  "inbox": "coop:orchestrator",
+  "note": null,
+  "status": "done",
+  "leased_at": "<ts>",
+  "age": "<dur>",
+  "expires_at": "<ts>",
+  "expires_in": "<dur>",
+  "released_at": "<ts>",
+  "chat_id": -100200,
+  "thread_id": 7,
+  "scope": "thread"
+}

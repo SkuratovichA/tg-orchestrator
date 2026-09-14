@@ -24,7 +24,9 @@ over all of it, and a pair of hands on the machine.
 - **Wake spool.** A turn can start work that outlives it (a long transcription,
   a build, a scrape). The job reports back with `scripts/wake.sh` and the runner
   opens a new turn on the same topic with the result in hand — so "I'll report
-  back" is a mechanism, not a promise.
+  back" is a mechanism, not a promise. The record's shape, the rename that
+  claims it exactly once, the dead-letter paths and the prompt it becomes live
+  in `src/wake/spool.ts`; the daemon only wires them up.
 - **Message-claim registry.** A SQLite arbiter (`src/claims.mjs`) that several
   agents on one machine consult before writing into a chat: message claims,
   chat leases with a live-pid check, optional hand-over through
@@ -33,6 +35,13 @@ over all of it, and a pair of hands on the machine.
 - **Turn safety.** Hard cap per turn (default 50 min) with a warning posted to
   the topic 5 minutes before the kill; a result printed by a process that then
   hangs is still accepted; a turn that already acted is never re-run.
+- **Model fallback.** When the model a turn runs on answers "you're out of usage
+  credits", the turn does not die: the SAME session is continued on
+  `TG_CLAUDE_FALLBACK_MODEL` with a RUNNER NOTICE telling the agent what it is
+  looking at, so nothing already done is repeated. The daemon then remembers it
+  and starts the next turns on the fallback for `TG_CLAUDE_FALLBACK_TTL_MS`
+  (60 min), after which one turn probes the original model again. The topic is
+  told on both transitions and `/status` names the model while it is on.
 - **Restart without killing a turn.** `scripts/restart-when-idle.sh` asks the
   runner to drain: it stops taking work, finishes what is in flight, exits by
   itself; only then the new code starts.
@@ -45,8 +54,17 @@ over all of it, and a pair of hands on the machine.
 
 ## Requirements
 
-- macOS or Linux, Node ≥ 22.5 (uses `node:sqlite`, no npm dependencies).
+- macOS or Linux, Node ≥ 22.18 (uses `node:sqlite` and runs TypeScript natively;
+  `.node-version` names the release `ensure.sh` prefers). Runtime dependencies:
+  `@tagents/core`, `zod`, `ts-pattern`, `i18next` — installed with `pnpm`.
 - The `claude` CLI, logged in.
+- A checkout of `tagents` beside this one: `@tagents/core` (**≥ 0.3**) owns the
+  headless turn lifecycle, the transcript reader and the plugin host that runs
+  this daemon, and is taken as a local `link:` (`../../tagents/packages/core`).
+  Build it once before running anything here —
+  `pnpm -C ../../tagents/packages/core build` — and again after changing it;
+  `pnpm test` refuses with that same line when its `dist/` is missing, and
+  `src/runner.mjs` exits non-zero with the reason when it cannot load it.
 - A Telegram bot from @BotFather, added to your forum group as an administrator
   with **Manage Topics**.
 - Optional, for the local voice-transcription fallback: `ffmpeg`, `uvx`
@@ -79,6 +97,9 @@ over all of it, and a pair of hands on the machine.
      <array><string>/bin/bash</string><string>/path/to/tg-orchestrator/ensure.sh</string></array>
      <key>RunAtLoad</key><true/>
      <key>StartInterval</key><integer>300</integer>
+     <!-- required: without it launchd kills the daemon's process group the
+          moment ensure.sh returns, silently, before its first log line -->
+     <key>AbandonProcessGroup</key><true/>
    </dict></plist>
    ```
    `launchctl load ~/Library/LaunchAgents/tg-orchestrator.plist`.
@@ -88,13 +109,13 @@ over all of it, and a pair of hands on the machine.
 
 ```
 getUpdates (long-poll)
-  → owner-only filter → claim every message in the registry
+  → owner-only filter → `inbound` event on disk → offset advances → claim in the registry
   → burst window (sliding, closed early by a flush word; commands bypass it)
   → group by topic → per-topic queue (scheduler.mjs)
   → claude -p --resume <topic session> --append-system-prompt-file agent.md
       stream-json: tool calls and the final result are seen as they happen
   → result accepted, session id saved, cost booked to ~/.config/tg-orchestrator/usage.jsonl
-  → message settled in the registry (answered / failed)
+  → `turn_result` / `turn_fail` event per message, then settled in the registry
 ```
 
 The agent answers through the Bot API itself; the runner posts only
@@ -102,6 +123,51 @@ infrastructure messages (a timeout warning, "could not process", `/status`).
 
 Per-topic brains: drop `agents/<chat_id>_<thread_id>.md` and that topic gets it
 as its system prompt instead of `agent.md`. Such a file must be self-contained.
+
+**The event log.** Every accepted message is written to `events.sqlite`
+(`src/events.mjs`, WAL + `synchronous=FULL`) BEFORE the Telegram offset moves
+past it — Telegram never redelivers an acknowledged update, so an offset ahead
+of the log means a `kill -9` erases the message. Everything that can account for
+a message (`turn_result`, `turn_fail`, `command`, `flush_word`, `skipped`) is
+written there too, so "what is still owed an answer" is a query rather than a
+guess. On startup the daemon re-queues every unclosed inbound message, prefixed
+with a recovery notice telling the model a previous attempt may already have
+posted something; anything older than 48 h is not replayed silently — the topic
+gets a "this stayed unanswered, write again if it still matters" note instead.
+`state.json` is now a cache: `node src/events.mjs rebuild` derives it from
+the log.
+
+## As a tagents plugin
+
+This repo is a [tagents](../../tagents) plugin: `package.json` carries the
+manifest (`"tagents": { "apiVersion": 1, "entry": "./src/plugin.ts" }`) and
+`src/plugin.ts` default-exports one `definePlugin({ … })` object — the i18next
+catalogue, one **service** (`runner`, the daemon) and one **CLI verb**
+(`status`, the same sentence `/status` answers in Telegram, read out of the
+daemon's own files).
+
+Nothing about starting it changed: launchd still runs `ensure.sh`, `ensure.sh`
+still runs `node src/runner.mjs`, and that file still owns the pid contract.
+What it does now is three lines — load `@tagents/core`, load the plugin, run the
+`runner` service under a context core builds (`createContext` → driver, `t`,
+log, config dir):
+
+```js
+const ctx = core.createContext({ plugin, log });
+const service = await core.runService(plugin, 'runner', ctx, { signals: true });
+await service.done;
+```
+
+The daemon itself is `startRunner(deps)` in `src/runner.ts`, which hands back
+the three handles a supervisor holds: `drain()` (the restart handshake —
+finish what is in flight, take no new work, exit), `stop(reason)` (now, the way
+SIGTERM always did) and `done`.
+
+Either import failing is **exit 1** with one sentence on stderr and in
+`runner.log`. A dead bot that exited 0 is the one outcome this design refuses:
+nobody would see it and `ensure.sh` would "start" it again five minutes later.
+The only silent exit 0 stays the missing or unusable env file — an unconfigured
+install is not a broken one.
 
 ## Configuration
 
@@ -114,14 +180,20 @@ All in `~/.config/tg-orchestrator/env` (or the process environment).
 | `TG_CLAUDE_TIMEOUT_MS` | 50 min | hard cap per turn; warning to the topic 5 min before |
 | `TG_MAX_PARALLEL_TURNS` | 3 | topics in a turn at once (one topic is always serial) |
 | `TG_CLAUDE_MODEL`, `TG_CLAUDE_EFFORT` | runner defaults | passed to `claude -p` |
+| `TG_CLAUDE_FALLBACK_MODEL` | `opus` | where a turn continues when `TG_CLAUDE_MODEL` is out of usage credits; empty (or the same model) switches the fallback off |
+| `TG_CLAUDE_FALLBACK_TTL_MS` | 60 min | how long the next turns stay on the fallback before one of them probes the original model again |
+| `TG_LOCALE` | `en` | language of everything the bot and `orc-status` say: `en` or `ru` |
+| `TG_FLUSH_WORDS` | `читай,прочитай,ответь,отвечай,го,go,answer,всё,все` | comma-separated words that close the burst window at once; matched after trim, lowercase and a leading `/` |
+| `TG_EVENTS_DB` | `~/.config/tg-orchestrator/events.sqlite` | durable event log (inbound + turn outcomes) |
 | `CLAIMS_DB` | `~/.config/claude-agents/claims.sqlite` | registry database, shared with other agents |
 | `CLAIMS_COOP` | first existing `~/git/work/claude-coop`, `~/git/claude-coop`, `~/claude-coop` | claude-coop `coop.sh`, for hand-over |
 | `CLAUDE_HOMES` | every `~/.claude*` | config dirs `sessions.mjs` scans |
 | `TELEGRAM_MCP_DIR`, `WHISPER_LANGUAGE` | `~/git/telegram-mcp`, `ru` | voice fallback |
 
 Runtime state: `~/.config/tg-orchestrator/` — `state.json` (offset, sessions),
-`status.json` (heartbeat), `usage.jsonl` (ledger), `runner.log`, `wake/`
-(spool), `runner.pid`, `drain` (restart flag). `state.json` and `status.json`
+`events.sqlite` (the durable event log), `status.json` (heartbeat),
+`usage.jsonl` (ledger), `runner.log`, `wake/` (spool), `runner.pid`, `drain`
+(restart flag). `state.json` and `status.json`
 are written atomically (tmp + rename), so another process never reads a torn
 file.
 
@@ -129,13 +201,27 @@ file.
 
 ```
 ensure.sh                 idempotent start (the launchd/cron entrypoint)
-src/runner.mjs            the daemon: poll, burst, dispatch, wake spool, commands, heartbeat
-src/turn.mjs              one claude turn: stream-json, timeout + warning, grace kill after
-                          result, retry decision, registry claims for incoming messages
+src/runner.mjs            the entry point: boots the telegram plugin's `runner` service
+                          through @tagents/core — and exits NON-ZERO with one sentence on
+                          stderr and in runner.log if core or the plugin cannot be loaded
+src/plugin.ts             the tagents plugin: the catalogue, the runner service, `status`
+src/runner.ts             the daemon itself: poll, burst, dispatch, wake spool, commands,
+                          heartbeat — startRunner(deps) → { drain, stop(reason), done }
+src/status-reply.ts       the /status sentence, said by the daemon and by the `status` verb
+src/turn.mjs              one claude turn — the lifecycle (stream-json, timeout + warning,
+                          grace kill after result) is @tagents/core's; what stays here is the
+                          session spec, the retry decision and the claims on incoming messages
 src/scheduler.mjs         per-topic queues, parallel across topics, serial within one
+src/events.mjs            the durable event log (library + CLI: tail / trace / orphans / rebuild)
+                          — a shim; the module is src/events.ts
+src/atomic.mjs            writeAtomic(file, data) — tmp + rename, shared by runner and events
 src/claims.mjs            the registry (library + CLI: owner / claim / release / lease / ask / inbox)
+                          — a shim; the module is src/claims.ts
+src/wake/spool.ts         the wake spool: the record schema, the file state machine
+                          (json → .taken → done/ | .bad | .retry.json → .giveup), the prompt
 src/status.mjs            monitoring snapshot (--watch, --json)
-src/sessions.mjs          recent / search / show across every Claude session on the box
+src/sessions.mjs          recent / search / show across every Claude session on the box —
+                          the CLI here, the transcript reading in @tagents/core
 src/arc-cdp.mjs           dependency-free Chrome DevTools driver (for browser chores)
 scripts/wake.sh           background-job → turn bridge (call on every exit path)
 scripts/restart-when-idle.sh   drain-based restart
@@ -167,6 +253,15 @@ node src/claims.mjs lease <chat_id> --owner me --ttl 2h ; ... ; unlease
 node src/claims.mjs status
 ```
 
+**Event log CLI.** What happened to a message, and what never got an answer:
+```sh
+node src/events.mjs trace 4821 [--convo -1002:53]   # every event that touched that message
+node src/events.mjs tail 50 [--convo K] [--kind turn_fail] [--json]
+node src/events.mjs orphans                         # inbound nothing ever closed
+node src/events.mjs sessions                        # {offset, sessions} projected from the log
+node src/events.mjs rebuild --write                 # regenerate state.json (refuses under a live runner)
+```
+
 **Restart on new code.** `scripts/restart-when-idle.sh <chat_id>:<thread_id>`
 — touches the drain flag, waits for the runner to finish and exit, starts the
 new code, reports the outcome into that topic (a failed restart is reported too;
@@ -196,9 +291,13 @@ npm run check # node --check + bash -n over everything
 - The agent runs `claude --dangerously-skip-permissions` as your user on your
   machine. The owner-only filter is the security boundary: never hand the bot
   token to anyone, never add the bot to a chat you do not control.
-- Bot-facing strings (`/help`, the timeout warning, `/reset`) are in Russian —
-  the author's language. Internationalising them is a one-file change waiting
-  for a second user.
+- Bot-facing text (`/help`, the timeout warning, `/reset`, the whole
+  `orc-status` screen) goes through one i18next catalogue, `src/i18n/`. English
+  is the default; `TG_LOCALE=ru` gives the author's own wording, byte for byte
+  what the bot said before the catalogue existed. A third language is a third
+  file — but plurals are still naive in both ("1 calls", "1 вызовов"), and the
+  flush words are configuration (`TG_FLUSH_WORDS`), not translation: they are
+  what you type, not what the bot says.
 - Built for one person; there is no multi-user mode and none planned.
 
 ## License

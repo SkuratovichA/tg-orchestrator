@@ -62,4 +62,17 @@ with open(tmp, "w", encoding="utf-8") as f:
     json.dump(rec, f, ensure_ascii=False)
 PY
 mv "$SPOOL/.$NAME.tmp" "$SPOOL/$NAME"
+
+# Mirror the post into the durable event log (src/events.mjs). The spool answers
+# "is there a pending job"; the event log answers "what happened to this job"
+# long after the record was consumed and moved to done/. Best effort on every
+# step — reporting a finished job must never fail because node is not on PATH
+# or the log is unwritable.
+EV_JSON="$(python3 -c 'import json,sys; print(json.dumps({"job": sys.argv[1], "kind": sys.argv[2], "ok": sys.argv[3] == "true", "file": sys.argv[4] or None}))' \
+  "$JOB" "$KIND" "$OK" "${FILE:-$TEXT_FILE}" 2>/dev/null || true)"
+if [ -n "$EV_JSON" ]; then
+  node "$(dirname "$0")/../src/events.mjs" append wake_posted \
+    --convo "$CONVO" --actor wake.sh --json "$EV_JSON" >/dev/null 2>&1 || true
+fi
+
 echo "wake queued: $SPOOL/$NAME"

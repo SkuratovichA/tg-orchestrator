@@ -1,0 +1,2 @@
+     1  <ts>  inbound         -100777:5              501  {"message_id":501,"text":"привет"}
+     4  <ts>  inbound         -100777:5              502  {"message_id":502,"text":"ещё"}

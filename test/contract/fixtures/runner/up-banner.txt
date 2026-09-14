@@ -1,0 +1,1 @@
+<ts> tg-orchestrator up: @testbot, pid=<pid>, offset=0, turn timeout 50 min, dedup on, parallel turns 3

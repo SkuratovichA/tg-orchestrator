@@ -1,0 +1,1 @@
+⚠️ Не смог обработать: exit=SIGKILL (timeout 800ms, 0 tool call(s)) 

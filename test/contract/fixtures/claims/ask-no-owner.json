@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "delivered": false,
+  "chat_id": -100123,
+  "thread_id": 0,
+  "owner": {
+    "ok": true,
+    "state": "free",
+    "reason": "no lease",
+    "owner": null,
+    "chat_id": -100123,
+    "thread_id": 0,
+    "scope": "thread"
+  },
+  "hint": "chat has no live owner — nobody to ask; claim the message and answer it yourself"
+}

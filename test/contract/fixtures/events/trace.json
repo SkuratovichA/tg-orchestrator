@@ -1,0 +1,50 @@
+[
+  {
+    "seq": 1,
+    "at": "<ts>",
+    "v": 1,
+    "kind": "inbound",
+    "convo": "-100777:5",
+    "msgId": 501,
+    "updateId": 900,
+    "actor": "runner:111",
+    "payload": {
+      "message_id": 501,
+      "text": "привет"
+    }
+  },
+  {
+    "seq": 2,
+    "at": "<ts>",
+    "v": 1,
+    "kind": "turn_start",
+    "convo": "-100777:5",
+    "msgId": null,
+    "updateId": null,
+    "actor": "runner:111",
+    "payload": {
+      "kind": "msgs",
+      "msg_ids": [
+        501
+      ],
+      "fresh": true
+    }
+  },
+  {
+    "seq": 3,
+    "at": "<ts>",
+    "v": 1,
+    "kind": "turn_result",
+    "convo": "-100777:5",
+    "msgId": 501,
+    "updateId": null,
+    "actor": "runner:111",
+    "payload": {
+      "ok": true,
+      "session": {
+        "id": "sess-1",
+        "last": 1
+      }
+    }
+  }
+]

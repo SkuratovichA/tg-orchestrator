@@ -1,0 +1,4 @@
+{
+  "ok": false,
+  "error": "unknown command 'bogus'\nclaims.mjs — who is handling which Telegram message / chat (JSON out; exit 0 ok, 3 busy, 1 error)\n\n  claim   <chat_id> <msg_id...> --owner NAME [--note TEXT] [--pid N]\n  release <chat_id> <msg_id...> --owner NAME [--status done|dropped]\n  lease   <chat_id> [--thread N] --owner NAME [--ttl 2h] [--inbox ID] [--note TEXT] [--pid N]\n  unlease <chat_id> [--thread N] --owner NAME\n  owner   <chat_id> [--thread N]              who holds it, is the process alive (exit 0 = free)\n  status  [--chat ID]                         everything held, by whom, how long\n  ask     <chat_id> [--thread N] --from NAME --text \"...\" [--to NAME]\n  inbox   <coop:NAME | NAME | --owner NAME> [--peek]\n\nOwner names: lowercase letters, digits, - and _ (they double as coop.sh mailboxes).\nDB: <TMP>/unknown-command.sqlite   coop: <TMP>/git/work/claude-coop/coop.sh"
+}

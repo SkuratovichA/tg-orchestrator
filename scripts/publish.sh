@@ -5,9 +5,18 @@
 # The private checkout carries the owner's agent.md, per-topic brains, the
 # machine map, changelogs and learning notes. None of that is published; the
 # public tree is an allowlist copy, so a new private file can never leak by
-# omission. Two guards run before the commit: a private denylist of patterns
+# omission. Three guards run before the commit: a private denylist of patterns
 # kept OUTSIDE the repo (~/.config/tg-orchestrator/publish-denylist, one
-# regex per line) and a generic scan for home paths and token shapes.
+# regex per line), a generic scan for home paths and token shapes, and a check
+# that no `link:` dependency survived the rewrite below.
+#
+# The export must install from a CLEAN CLONE, and the private checkout takes
+# @tagents/core as `link:` from the package next door. So the copied
+# package.json is rewritten to take the same package from git, and
+# pnpm-lock.yaml is not exported at all: the lockfile pins that link: path
+# (`specifier: link:../../tagents/packages/core`), which resolves to nothing
+# beside a clone, and rewriting a lockfile by hand is how you ship one that
+# disagrees with its manifest.
 #
 # usage: scripts/publish.sh "<commit message>" [public_dir]
 #   public_dir defaults to $TG_ORCHESTRATOR_PUBLIC_DIR or ~/git/tg-orchestrator
@@ -19,7 +28,9 @@ MSG="${1:?usage: publish.sh \"<commit message>\" [public_dir]}"
 PUB="${2:-${TG_ORCHESTRATOR_PUBLIC_DIR:-$HOME/git/tg-orchestrator}}"
 DENY="${TG_ORCHESTRATOR_DENYLIST:-$HOME/.config/tg-orchestrator/publish-denylist}"
 
-ALLOW=(src test scripts ensure.sh README.md LICENSE package.json .env.example agent.example.md .gitignore)
+ALLOW=(src test scripts ensure.sh README.md LICENSE package.json tsconfig.json .node-version .env.example agent.example.md .gitignore)
+# Where a public consumer gets @tagents/core from.
+CORE_GIT_SPEC='github:SkuratovichA/tagents#path:/packages/core'
 
 mkdir -p "$PUB"
 [ -d "$PUB/.git" ] || git -C "$PUB" init -q -b main
@@ -33,6 +44,31 @@ for p in "${ALLOW[@]}"; do
 done
 
 fail() { echo "publish: REFUSING — $1:" >&2; echo "$2" | head -20 >&2; exit 1; }
+
+# The one rewrite the export needs: a path dependency becomes a git one.
+node --input-type=commonjs -e '
+const fs = require("fs");
+const [file, spec] = process.argv.slice(1);
+const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+const cur = pkg.dependencies && pkg.dependencies["@tagents/core"];
+if (!cur) { console.error("publish: @tagents/core is no longer a dependency — drop this step"); process.exit(1); }
+if (!cur.startsWith("link:")) { console.error("publish: expected a link: spec for @tagents/core, found " + cur); process.exit(1); }
+pkg.dependencies["@tagents/core"] = spec;
+fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
+' "$PUB/package.json" "$CORE_GIT_SPEC"
+
+# The other rewrite: a script default that names the owner's checkout layout
+# ($HOME/git/<repo>) becomes the public layout ($HOME/git/<repo>).
+# Production keeps the real default on purpose — a clean-env deploy once dropped
+# TELEGRAM_MCP_DIR and the fallback pointed at a path that did not exist.
+for f in "$PUB"/scripts/*.sh; do
+  [ -f "$f" ] || continue
+  # [p]ersonal: this script is exported too, and the denylist gate below would
+  # otherwise find the private layout spelled out in its own source.
+  sed -i '' 's#\$HOME/git/[p]ersonal/#$HOME/git/#g' "$f"
+done
+hits=$(grep -rn 'git/[p]ersonal' "$PUB"/scripts || true)
+[ -z "$hits" ] || fail "the layout rewrite missed a private default" "$hits"
 if [ -f "$DENY" ]; then
   hits=$(grep -rnEf "$DENY" "$PUB" --exclude-dir=.git || true)
   [ -z "$hits" ] || fail "private identifiers in the export (see $DENY)" "$hits"
@@ -40,6 +76,9 @@ fi
 # --exclude=publish.sh: this very pattern list would otherwise match itself.
 hits=$(grep -rnE '/Users/[A-Za-z]|/home/[a-z]|[0-9]{8,10}:[A-Za-z0-9_-]{35}|sk-ant-|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY' "$PUB" --exclude-dir=.git --exclude=publish.sh || true)
 [ -z "$hits" ] || fail "home paths or token shapes in the export" "$hits"
+# A link: is a path on THIS machine: it cannot resolve from a clean clone.
+hits=$(grep -rn 'link:' "$PUB" --exclude-dir=.git --include=package.json --include='*.yaml' --include='*.yml' || true)
+[ -z "$hits" ] || fail "a link: dependency survived into the export" "$hits"
 
 git -C "$PUB" add -A
 if git -C "$PUB" diff --cached --quiet; then

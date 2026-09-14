@@ -1,0 +1,1 @@
+⚠️ Запись в wake-спуле без адреса (convo=нет такого): «whisper msg 380». Лежит в wake/done/20260911T120500-4242-job.json.bad

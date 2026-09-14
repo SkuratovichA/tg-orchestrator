@@ -1,0 +1,13 @@
+[
+  "-p",
+  "--model",
+  "fable",
+  "--effort",
+  "xhigh",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--dangerously-skip-permissions",
+  "--append-system-prompt-file",
+  "<ROOT>/agent.md"
+]

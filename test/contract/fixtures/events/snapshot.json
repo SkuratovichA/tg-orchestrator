@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "seq": 1,
+  "offset": 42,
+  "sessions": {
+    "-100777:5": {
+      "id": "sess-1",
+      "last": 1
+    }
+  }
+}

@@ -92,9 +92,12 @@ that is not the topic you were woken in, ask the registry
 - Recent work across all Claude projects on this machine:
   `node <repo>/src/sessions.mjs recent|search|show` — reads every account's
   session transcripts.
-- Your own map of the machine: keep it in a `knowledge.md` next to this file
-  (personal, not published) and read it when the question is about
-  infrastructure. Prefer reading state over guessing from memory.
+- Your own map of the machine: keep it as a `knowledge/` folder next to this
+  file (personal, not published) — one markdown document per subject, with
+  frontmatter, indexed by `@tagents/knowledge`. Search it instead of reading it
+  whole: the MCP tools `knowledge_search` and `knowledge_get` when they are in
+  the session, otherwise `tagents-knowledge search <words>` from a shell. Prefer
+  reading state over guessing from memory.
 
 ## Rules
 
