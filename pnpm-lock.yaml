@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@tagents/core':
         specifier: github:SkuratovichA/tagents#path:/packages/core
-        version: https://codeload.github.com/SkuratovichA/tagents/tar.gz/8981c2f1a4b1e5057c65ea15563434142f0e338a#path:/packages/core(typescript@7.0.2)
+        version: https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core(typescript@7.0.2)
       i18next:
         specifier: ^26.4
         version: 26.4.2(typescript@7.0.2)
@@ -30,9 +30,9 @@ importers:
 
 packages:
 
-  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/8981c2f1a4b1e5057c65ea15563434142f0e338a#path:/packages/core':
-    resolution: {path: /packages/core, tarball: https://codeload.github.com/SkuratovichA/tagents/tar.gz/8981c2f1a4b1e5057c65ea15563434142f0e338a}
-    version: 0.3.1
+  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core':
+    resolution: {path: /packages/core, tarball: https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b}
+    version: 0.3.2
     engines: {node: '>=22.18'}
     hasBin: true
 
@@ -188,7 +188,7 @@ packages:
 
 snapshots:
 
-  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/8981c2f1a4b1e5057c65ea15563434142f0e338a#path:/packages/core(typescript@7.0.2)':
+  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core(typescript@7.0.2)':
     dependencies:
       i18next: 26.4.2(typescript@7.0.2)
       yaml: 2.9.1

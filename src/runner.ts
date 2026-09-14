@@ -42,6 +42,7 @@ import {
   type JsonValue,
 } from './events.ts';
 import { continuationNotice, ModelFallback } from './model-fallback.ts';
+import { tryCatch } from './result.ts';
 import { createScheduler, type Scheduler } from './scheduler.ts';
 import { statusReply } from './status-reply.ts';
 import {
@@ -793,16 +794,25 @@ export async function startRunner(deps: RunnerDeps = {}): Promise<RunningRunner>
     if (attempt.ok) {
       const how = attempt.killedAfterResult ? ' (result accepted; process killed after it)' : '';
       log(`claude ok${how}${on} [${key}]:`, String(attempt.text ?? '').replace(/\s+/g, ' ').slice(0, 160));
-    } else {
-      log(`claude FAILED${on} [${key}]:`, String(attempt.error));
-      if (notify)
-        await sendText(
-          notify.chatId,
-          t('turn.failed', { error: String(attempt.error).slice(0, 200) }),
-          notify.threadId
-        );
-    }
+    } else await reportTurnFailure(key, String(attempt.error), notify, on);
     return attempt;
+  }
+
+  // What a failed turn owes the log and the topic, whichever way it failed: the
+  // line an operator greps for and the ⚠️ the owner sees. Shared by the failed
+  // Attempt above and by a driver that rejected outright (handleConversation) —
+  // a turn must never end in silence, so the two must not drift apart.
+  // Best-effort by construction: sendText already swallows a rejected Bot API
+  // call into a log line, so nothing here throws back at the caller.
+  async function reportTurnFailure(
+    key: string,
+    error: string,
+    notify: Notify | null,
+    on = ''
+  ): Promise<void> {
+    log(`claude FAILED${on} [${key}]:`, error);
+    if (notify)
+      await sendText(notify.chatId, t('turn.failed', { error: error.slice(0, 200) }), notify.threadId);
   }
 
   async function handleConversation(
@@ -827,12 +837,48 @@ export async function startRunner(deps: RunnerDeps = {}): Promise<RunningRunner>
       `Now: ${new Date(now()).toISOString()}\n\n` +
       msgs.map((x) => renderMessage(x, now())).join('\n\n');
     annotateIncoming(claimsDb, msgs, { note: 'in-turn', log });
-    const attempt = await runTurn(
-      key,
-      prompt,
-      { chatId: m.chat.id, threadId: m.message_thread_id },
-      { kind: 'msgs', msgIds: msgs.map((x) => x.message_id), ...(recovered ? { recovered } : {}) }
+    const notify: Notify = { chatId: m.chat.id, threadId: m.message_thread_id };
+    // A turn REJECTS when the session driver does — a third-party driver handed
+    // in through RunnerDeps.driver, i.e. the plugin host's ctx.driver, whose
+    // open()/prompt() threw instead of returning an outcome. Nothing inside
+    // runTurn ran then: no ⚠️, no closing row, and the messages would stay
+    // 'in-turn' in the registry until the next daemon start re-queued them
+    // (CLOSING_KINDS in events.ts). So the throw owes exactly what a failed
+    // Attempt owes, written with the same fields so no reader can tell them apart.
+    const [attempt, thrown] = await tryCatch(
+      runTurn(key, prompt, notify, {
+        kind: 'msgs',
+        msgIds: msgs.map((x) => x.message_id),
+        ...(recovered ? { recovered } : {}),
+      })
     );
+    if (thrown !== null) {
+      const error = errMessage(thrown);
+      evMany(
+        msgs.map((x) => ({
+          kind: 'turn_fail' as const,
+          convo: key,
+          msgId: x.message_id,
+          payload: asPayload({
+            ok: false,
+            sessionId: null,
+            resumedFrom: null,
+            costUSD: null,
+            numTurns: null,
+            durationMs: null,
+            toolUses: null,
+            timedOut: false,
+            killedAfterResult: false,
+            error: error.slice(0, 500),
+            kind: 'msgs',
+            ...(recovered ? { recovered: true } : {}),
+          }),
+        }))
+      );
+      await reportTurnFailure(key, error, notify);
+      settleIncoming(claimsDb, msgs, { note: `failed: ${error.slice(0, 120)}`, log });
+      return;
+    }
     // Either way the owner got an answer (the result or the ⚠️), so the message
     // is done — a replay must not open a second turn on it.
     const note = attempt.ok

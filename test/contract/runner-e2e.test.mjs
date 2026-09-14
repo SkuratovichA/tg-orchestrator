@@ -15,12 +15,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import {
   baseEnv, expectFixture, NODE, readIf, rmDir, ROOT, run, runSrc, scrubJson, scrubText,
-  SRC, tmpDir, waitFor,
+  SRC, startFakeTelegram, tmpDir, waitFor,
 } from './helpers.mjs';
 // The sentence the owner is shown comes from the catalogue, never from a copy:
 // a reworded key must fail this case rather than pass it against stale text.
@@ -88,89 +87,9 @@ if (mode === 'usage-limit-on-fable' && model === 'fable' && !healed) {
 `;
 
 // ------------------------------------------------------- fake Telegram API ---
-function startTelegram() {
-  const state = { queue: [], sent: [], getMe: 0, methods: [], nextId: 9000 };
-  const timers = new Set();
-  const later = (fn, ms) => {
-    const t = setTimeout(() => {
-      timers.delete(t);
-      fn();
-    }, ms);
-    t.unref();
-    timers.add(t);
-  };
-
-  const server = http.createServer((req, res) => {
-    const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const send = (obj) => {
-        try {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(obj));
-        } catch {
-          /* the runner aborted this request (shutdown) */
-        }
-      };
-      const m = /^\/bot(.+?)\/(\w+)$/.exec(req.url ?? '');
-      if (!m || m[1] !== TOKEN) return send({ ok: false, error_code: 401, description: 'Unauthorized' });
-      const method = m[2];
-      let body = {};
-      try {
-        body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
-      } catch {
-        /* keep {} */
-      }
-      state.methods.push(method);
-      if (method === 'getMe') {
-        state.getMe++;
-        return send({ ok: true, result: { id: 7, is_bot: true, first_name: 'Test', username: 'testbot' } });
-      }
-      if (method === 'getUpdates') {
-        const offset = Number(body.offset ?? 0);
-        const deadline = Date.now() + LONGPOLL_MS;
-        const tick = () => {
-          const got = state.queue.filter((u) => u.update_id >= offset);
-          if (got.length || Date.now() >= deadline) return send({ ok: true, result: got });
-          later(tick, 15);
-        };
-        return tick();
-      }
-      if (method === 'sendMessage') {
-        state.sent.push(body);
-        return send({
-          ok: true,
-          result: { message_id: state.nextId++, date: 1, chat: { id: body.chat_id }, text: body.text },
-        });
-      }
-      return send({ ok: false, error_code: 404, description: `unsupported method ${method}` });
-    });
-  });
-  server.unref();
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      resolve({
-        state,
-        base: `http://127.0.0.1:${port}`,
-        push(message) {
-          const update_id = 1000 + state.queue.length;
-          // Real Telegram stamps the send time in Unix seconds and the prompt now
-          // renders it; a fixed `date: 1` would print 1970 and a 56-year age.
-          state.queue.push({ update_id, message: { date: Math.floor(Date.now() / 1000), ...message } });
-          return update_id;
-        },
-        async stop() {
-          for (const t of timers) clearTimeout(t);
-          timers.clear();
-          server.closeAllConnections();
-          await new Promise((r) => server.close(r));
-        },
-      });
-    });
-  });
-}
+// The server itself lives in helpers.mjs, so the in-process case in
+// runner-driver.test.mjs drives the same fake Bot API.
+const startTelegram = () => startFakeTelegram({ token: TOKEN, longpollMs: LONGPOLL_MS });
 
 const ownerMsg = (message_id, text, extra = {}) => ({
   message_id,
