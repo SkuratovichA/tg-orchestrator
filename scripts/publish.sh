@@ -80,6 +80,18 @@ hits=$(grep -rnE '/Users/[A-Za-z]|/home/[a-z]|[0-9]{8,10}:[A-Za-z0-9_-]{35}|sk-a
 hits=$(grep -rn 'link:' "$PUB" --exclude-dir=.git --include=package.json --include='*.yaml' --include='*.yml' || true)
 [ -z "$hits" ] || fail "a link: dependency survived into the export" "$hits"
 
+# What a stranger gets. Install from the rewritten package.json (core comes
+# from GitHub and builds itself) and run the same gates the private checkout
+# runs. Only a real install shows some classes of trouble: a link: keeps two
+# copies of every shared dependency, so a global type augmentation leaking out
+# of one package never meets the other's code here.
+check_log=$(mktemp -t publish-check)
+for step in install typecheck test; do
+  if ! (cd "$PUB" && corepack pnpm "$step") >"$check_log" 2>&1; then
+    fail "the export fails '$step' from a clean install (log: $check_log)" "$(tail -20 "$check_log")"
+  fi
+done
+echo "publish: clean install, typecheck and tests pass in $PUB"
 git -C "$PUB" add -A
 if git -C "$PUB" diff --cached --quiet; then
   echo "publish: nothing changed in $PUB"
