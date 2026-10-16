@@ -28,13 +28,20 @@ CHAT="${CONVO%%:*}"; THREAD="${CONVO##*:}"
 DRAIN="$CFG/drain"
 
 set -a; . "$CFG/env"; set +a
-API="https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN"
 
+# The send itself lives in scripts/tg-send.sh — one implementation for the whole
+# repo, grep-on-raw-body success detection and an idempotency key, so a response
+# that cannot be read never turns into a second copy of the same message.
 say() {
-  local args=(-d chat_id="$CHAT")
-  [ -n "$THREAD" ] && [ "$THREAD" != "0" ] && args+=(-d message_thread_id="$THREAD")
-  curl -s "$API/sendMessage" "${args[@]}" --data-urlencode text="$1" \
-    | grep -q '"ok":true' || echo "sendMessage failed" >&2
+  local f; f="$(mktemp -t tgrestart)"
+  printf '%s' "$1" > "$f"
+  local args=(--chat "$CHAT" --text-file "$f")
+  [ -n "$THREAD" ] && [ "$THREAD" != "0" ] && args+=(--thread "$THREAD")
+  # --salt: a restart notice can legitimately repeat word for word across runs;
+  # without it the key would treat the second one as a duplicate forever.
+  "$HERE/tg-send.sh" "${args[@]}" --salt "restart-$$-$(date +%s)" > /dev/null \
+    || echo "sendMessage failed" >&2
+  rm -f "$f"
 }
 
 phase() { sed -n 's/.*"phase":"\([a-z]*\)".*/\1/p' "$CFG/status.json" 2>/dev/null; }

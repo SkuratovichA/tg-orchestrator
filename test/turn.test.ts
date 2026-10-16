@@ -29,6 +29,7 @@ import {
   runClaude,
   settleIncoming,
   TIMEOUT_WARN_BEFORE_MS,
+  turnSpec,
   type Attempt,
   type AttemptPlan,
   type FallbackPolicy,
@@ -151,6 +152,20 @@ test('the constants runner.mjs imports keep their values', () => {
   assert.equal(parseTimeoutMs('abc', 7), 7);
   assert.equal(parseTimeoutMs('120000'), 120000);
   assert.equal(parseTimeoutMs(''), DEFAULT_CLAUDE_TIMEOUT_MS);
+});
+
+// An account is a whole login, not a setting, so turnSpec never guesses: null
+// (the default) means the personal one AND drops an inherited CLAUDE_CONFIG_DIR
+// in the driver, and a string is what the runner picked for THIS turn out of
+// TG_CLAUDE_CONFIG_DIR — which is how the deadline reverts with no restart.
+test('turnSpec carries the account the runner chose, and null when it chose none', () => {
+  const base: TurnRequest = { prompt: 'hi' };
+  assert.equal(turnSpec(base).configDir, null, 'an omitted account is the personal one');
+  assert.equal(turnSpec({ ...base, configDir: null }).configDir, null);
+  assert.equal(
+    turnSpec({ ...base, configDir: '/var/x/.claude-work' }).configDir,
+    '/var/x/.claude-work'
+  );
 });
 
 test('the session spec becomes the argv and the env the daemon has always sent', async () => {

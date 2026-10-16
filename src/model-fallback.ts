@@ -1,5 +1,6 @@
 // "The model we run on has no usage left" — recognising it, remembering it,
-// and the notice the continuation attempt carries.
+// and the notice the continuation attempt carries. Published as
+// `@tagents/plugin-telegram/model-fallback` on 17.09.2026, for other runners.
 //
 // The incident (11.09.2026): fable's usage bucket was empty. Every turn came
 // back as `exit=1 You're out of usage credits. Switch to another model, …` —

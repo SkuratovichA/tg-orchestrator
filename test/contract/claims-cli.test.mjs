@@ -66,6 +66,29 @@ test('claim: a message another owner holds is refused (exit 3)', () => {
   expectFixture('claims/claim-busy.json', scrubJson(parseSingleJson(r.stdout), [[tmp, '<TMP>']]));
 });
 
+test('work claim: free work is acquired (exit 0), a second owner is refused (exit 3)', () => {
+  const db = 'work-claim-ok';
+  const key = 'gh:acme/shop#741';
+  pin(db, ['work', 'claim', key, '--owner', 'shop-product', '--ttl', '3h', '--note', 'implementing', '--pid', '0'], { exit: 0, fixture: 'claims/work-claim-ok.json' });
+  const r = claims(db, ['work', 'claim', key, '--owner', 'shop-cto', '--pid', '0']);
+  assert.equal(r.code, 3);
+  expectFixture('claims/work-claim-busy.json', scrubJson(parseSingleJson(r.stdout), [[tmp, '<TMP>']]));
+  assert.equal(claims(db, ['work', 'owner', key]).code, 3, 'owner of held work exits 3');
+  assert.equal(claims(db, ['work', 'owner', 'gh:acme/shop#1']).code, 0, 'work nobody claimed is free');
+});
+
+test('work release: the holder releases (exit 0), and the work reads as free again', () => {
+  const db = 'work-release';
+  const key = 'gh:acme/shop#742';
+  assert.equal(claims(db, ['work', 'claim', key, '--owner', 'shop-product', '--pid', '0']).code, 0);
+  const r = claims(db, ['work', 'release', key, '--owner', 'shop-product']);
+  assert.equal(r.code, 0);
+  expectFixture('claims/work-release-ok.json', scrubJson(parseSingleJson(r.stdout), [[tmp, '<TMP>']]));
+  const owner = claims(db, ['work', 'owner', key]);
+  assert.equal(owner.code, 0);
+  assert.equal(parseSingleJson(owner.stdout).reason, 'released (done)');
+});
+
 test('release: the holder may release (exit 0)', () => {
   const db = 'release-ok';
   assert.equal(claims(db, ['claim', '-100123', '501', '--owner', 'orchestrator', '--pid', '0']).code, 0);

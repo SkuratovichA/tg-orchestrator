@@ -64,3 +64,18 @@ type Translate = (key: TranslationKey, vars?: TranslationVars) => string;
 // actually need, and test/i18n.test.ts checks the placeholders for every key
 // in both catalogues.
 export const t: Translate = (key, vars) => (getI18n().t as Translate)(key, vars);
+
+/**
+ * The catalogue value RAW — `{{placeholders}}` untouched — for the strings
+ * that are filled in somewhere else. The live status message (src/live-status.ts)
+ * is shared with the other runners and holds no text of its own: it is handed a
+ * phrase book, fills it itself, and t() would have interpolated the holes away
+ * before it ever saw them.
+ */
+export function template(key: TranslationKey): string {
+  const i18n = getI18n();
+  const own = i18n.getResource(i18n.language, NS, key);
+  if (typeof own === 'string') return own;
+  const fallback = i18n.getResource(DEFAULT_LOCALE, NS, key);
+  return typeof fallback === 'string' ? fallback : key;
+}

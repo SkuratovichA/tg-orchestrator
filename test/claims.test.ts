@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ClaimResult, LeaseResult } from '../src/claims.ts';
+import type { ClaimResult, LeaseResult, WorkClaimResult } from '../src/claims.ts';
 
 const SELF = fileURLToPath(import.meta.url);
 const LIB = path.join(path.dirname(SELF), '..', 'src', 'claims.mjs');
@@ -56,6 +56,18 @@ function naiveClaim(db: DatabaseSync, chatId: number, messageId: number, owner: 
   return { ok: true, owner, acquired: [{ message_id: messageId }], busy: [] };
 }
 
+// The same mistake for work claims: look at the key, then overwrite it.
+function naiveWorkClaim(db: DatabaseSync, key: string, owner: string): { ok: boolean; owner: string } {
+  const row = db.prepare('SELECT owner FROM work_claims WHERE key = ?').get(key);
+  if (row) return { ok: false, owner: String(row['owner']) };
+  db.prepare(
+    `INSERT OR REPLACE INTO work_claims (key, owner, status, claimed_at, expires_at) VALUES (?, ?, 'held', ?, ?)`,
+  ).run(key, owner, Date.now(), Date.now() + 60_000);
+  return { ok: true, owner };
+}
+
+const workKey = (chat: number, msg: number) => `gh:race/repo${Math.abs(chat)}#${msg}`;
+
 async function worker(args: readonly string[]): Promise<void> {
   const [mode = '', t0 = '0', owner = '', chat = '0', msg = '0'] = args;
   const lib = await loadClaims(); // CLAIMS_DB comes from the parent's env
@@ -69,17 +81,19 @@ async function worker(args: readonly string[]): Promise<void> {
   while (Date.now() < start) {
     /* spin */
   }
-  let r: ClaimResult | LeaseResult | NaiveOutcome;
+  let r: ClaimResult | LeaseResult | NaiveOutcome | WorkClaimResult | { ok: boolean; owner: string };
   if (mode === 'claim') r = lib.claimMessages(db, { chatId, messageIds: [messageId], owner, pid: process.pid });
   else if (mode === 'lease') r = lib.leaseChat(db, { chatId, owner, pid: process.pid, ttlMs: 60_000 });
   else if (mode === 'naive') r = naiveClaim(db, chatId, messageId, owner);
+  else if (mode === 'work') r = lib.claimWork(db, { key: workKey(chatId, messageId), owner, pid: process.pid, ttlMs: 60_000 });
+  else if (mode === 'naive-work') r = naiveWorkClaim(db, workKey(chatId, messageId), owner);
   else throw new Error(`unknown worker mode '${mode}'`);
   process.stdout.write(JSON.stringify({ started_late_ms: Math.max(0, Date.now() - start), ...r }));
   // A lease carries the winner's pid and a dead pid frees it. A winner that exits
   // at once would therefore be taken over legitimately by the next worker in line —
   // the first version of this test did exactly that and reported 12 "winners".
   // Stay alive until every other worker has had its turn.
-  if (mode === 'lease' && r.ok) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+  if ((mode === 'lease' || mode === 'work') && r.ok) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
 }
 
 // ------------------------------------------------------------------ harness ---
@@ -167,6 +181,7 @@ interface CliJson {
   delivered?: boolean;
   seq?: number | null;
   messages?: Array<{ text?: string }>;
+  work?: Array<{ key: string; state: string }>;
 }
 
 function cli(args: readonly string[]): { code: number | null; json: CliJson | null; stdout: string; stderr: string } {
@@ -331,6 +346,93 @@ async function main(): Promise<number> {
     check(r.code === 0 && r.json?.messages?.[0]?.text === 'second one via cli', 'cli inbox → the message, parsed');
     r = cli(['ask', '-4001', '--from', 'orch-t', '--text', 'anyone?']);
     check(r.code === 3, `cli ask without an owner → exit 3 (exit ${r.code})`);
+  }
+
+  console.log(`\n9. work claim — ${N} processes race for one piece of work`);
+  for (let r = 1; r <= ROUNDS; r++) {
+    const s = summarize(await race('work', { chatId: -5001, messageId: r, env }));
+    check(s.errors.length === 0, `round ${r}: no worker crashed${s.errors[0] ? ` — ${String(s.errors[0].error).slice(0, 200)}` : ''}`);
+    check(s.winners.length === 1, `round ${r}: exactly one winner (got ${s.winners.length}: ${s.winners.map((w) => w.owner).join(',') || '-'})`);
+    const told = s.losers.filter((x) => x.owner === s.winner && x.state === 'held').length;
+    check(told === N - 1, `round ${r}: ${told}/${N - 1} losers were told ${s.winner} holds the work (max start skew ${s.late}ms)`);
+  }
+  const heldWork = Number(
+    db.prepare(`SELECT count(*) c FROM work_claims WHERE key LIKE 'gh:race/repo5001#%' AND status = 'held'`).get()?.['c']
+  );
+  check(heldWork === ROUNDS, `db holds exactly ${ROUNDS} work claims (got ${heldWork})`);
+
+  console.log('\n10. negative control — the work race against SELECT-then-INSERT with no transaction (must break)');
+  let dupWork = 0;
+  for (let r = 1; r <= ROUNDS; r++) {
+    const s = summarize(await race('naive-work', { chatId: -5002, messageId: r, env }));
+    console.log(`  round ${r}: ${s.winners.length} winners`);
+    if (s.winners.length > 1) dupWork++;
+  }
+  check(dupWork > 0, `naive work claim produced duplicate winners in ${dupWork}/${ROUNDS} rounds`);
+
+  console.log(`\n11. work claim — liveness: expired and dead-owner claims are taken by exactly one of ${N}, a live one by none`);
+  lib.claimWork(db, { key: workKey(-5003, 1), owner: 'stale', pid: process.pid, ttlMs: 1 });
+  await sleep(10);
+  check(lib.workOwner(db, { key: workKey(-5003, 1) }).reason === 'ttl expired', 'a work claim past its ttl reads as free (ttl expired)');
+  {
+    const s = summarize(await race('work', { chatId: -5003, messageId: 1, env }));
+    check(s.winners.length === 1, `expired: exactly one worker took the work (got ${s.winners.length})`);
+    check(s.winners[0]?.took_over_from?.owner === 'stale', `expired: winner reports the takeover from 'stale'`);
+  }
+  const ghost = await deadPid();
+  lib.claimWork(db, { key: workKey(-5003, 2), owner: 'ghost', pid: ghost ?? null, ttlMs: 3_600_000 });
+  check(lib.workOwner(db, { key: workKey(-5003, 2) }).reason === 'owner process dead', `a work claim whose pid ${ghost} is gone reads as free`);
+  {
+    const s = summarize(await race('work', { chatId: -5003, messageId: 2, env }));
+    check(s.winners.length === 1, `dead owner: exactly one worker took the work (got ${s.winners.length})`);
+    check(s.winners[0]?.took_over_from?.owner === 'ghost', `dead owner: winner reports the takeover from 'ghost'`);
+  }
+  lib.claimWork(db, { key: workKey(-5003, 3), owner: 'alive-one', pid: process.pid, ttlMs: 3_600_000 });
+  {
+    const s = summarize(await race('work', { chatId: -5003, messageId: 3, env }));
+    check(s.winners.length === 0, `live owner: nobody took the work (got ${s.winners.length})`);
+    const told = s.losers.filter((x) => x.owner === 'alive-one' && x.alive === true && x.state === 'held').length;
+    check(told === N, `live owner: ${told}/${N} were told alive-one holds it and is alive`);
+  }
+
+  console.log('\n12. work claim semantics and CLI');
+  {
+    const key = workKey(-5004, 1);
+    const w1 = lib.claimWork(db, { key, owner: 'a', pid: process.pid, note: 'implementing' });
+    const w2 = lib.claimWork(db, { key, owner: 'a', pid: process.pid, ttlMs: 7_200_000 });
+    check(w1.ok && w2.ok && w2.renewed === true && 'note' in w2 && w2.note === 'implementing', 'same owner claiming again = renew, note kept');
+    check(lib.releaseWork(db, { key, owner: 'b' }).reason === 'held by a', 'release by a non-owner is refused');
+    check(lib.releaseWork(db, { key, owner: 'a' }).ok, 'release by the owner (done)');
+    check(lib.workOwner(db, { key }).reason === 'released (done)', 'released work reads as free');
+    check(lib.claimWork(db, { key, owner: 'b', pid: process.pid }).ok, 'done work can be claimed again (an issue comes back)');
+    let bad = false;
+    try {
+      lib.claimWork(db, { key: 'has space', owner: 'a' });
+    } catch (e) {
+      bad = e instanceof lib.ClaimsError;
+    }
+    check(bad, 'work keys are validated');
+  }
+  {
+    const key = 'gh:acme/shop#741';
+    r = cli(['work', 'claim', key, '--owner', 'shop-product', '--ttl', '3h', '--note', 'implementing, worktree it-741', '--pid', String(process.pid)]);
+    check(r.code === 0 && r.json?.acquired === true && r.json?.owner === 'shop-product', `cli work claim → exit 0 (exit ${r.code})`);
+    r = cli(['work', 'claim', key, '--owner', 'shop-cto', '--pid', '0']);
+    check(r.code === 3 && r.json?.owner === 'shop-product' && r.json?.state === 'held', `cli work claim of held work → exit 3, held by shop-product (exit ${r.code})`);
+    r = cli(['work', 'owner', key]);
+    check(r.code === 3 && r.json?.owner === 'shop-product' && r.json?.alive === true, `cli work owner of held work → exit 3 (exit ${r.code})`);
+    r = cli(['work', 'status']);
+    check(r.code === 0 && Array.isArray(r.json?.work) && r.json.work.some((w) => w.key === key && w.state === 'held'), `cli work status lists the key as held (exit ${r.code})`);
+    r = cli(['work', 'release', key, '--owner', 'shop-cto']);
+    check(r.code === 3, `cli work release by a non-owner → exit 3 (exit ${r.code})`);
+    r = cli(['work', 'release', key, '--owner', 'shop-product', '--status', 'dropped']);
+    check(r.code === 0 && r.json?.ok === true, `cli work release → exit 0 (exit ${r.code})`);
+    r = cli(['work', 'owner', key]);
+    check(r.code === 0 && r.json?.state === 'free', `cli work owner of released work → exit 0 (exit ${r.code})`);
+    r = cli(['work', 'claim', 'bad key', '--owner', 'a']);
+    check(r.code === 1 && /work key/.test(r.json?.error ?? ''), `cli bad work key → exit 1 (exit ${r.code})`);
+    r = cli(['work', 'bogus']);
+    check(r.code === 1 && r.json?.ok === false, `cli unknown work command → exit 1 (exit ${r.code})`);
   }
 
   console.log(`\n${failures.length ? `FAILED: ${failures.length}` : 'ALL PASSED'} — ${tmp}`);

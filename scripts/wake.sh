@@ -14,6 +14,7 @@
 #   wake.sh --convo <chat_id>:<thread_id> --job "whisper msg 380" \
 #           [--kind voice-transcript] [--fail] [--text-file PATH | --text STR] \
 #           [--file PATH] [--started ISO8601]
+#   env: WAKE_SPOOL=<dir>  spool of a different daemon (default ~/.config/tg-orchestrator/wake)
 set -euo pipefail
 
 CONVO="" JOB="" KIND="job" OK=true TEXT="" TEXT_FILE="" FILE="" STARTED=""
@@ -34,7 +35,10 @@ done
 [ -n "$CONVO" ] || { echo "wake.sh: --convo <chat_id>:<thread_id> is required" >&2; exit 2; }
 [ -n "$JOB" ] || { echo "wake.sh: --job \"<what this was>\" is required" >&2; exit 2; }
 
-SPOOL="$HOME/.config/tg-orchestrator/wake"
+# WAKE_SPOOL: another daemon that drains the same record format (a
+# ticket-agent runner reading ~/.config/ticket-agent/wake) reuses this
+# script instead of a copy of it. Unset = the orchestrator's own spool.
+SPOOL="${WAKE_SPOOL:-$HOME/.config/tg-orchestrator/wake}"
 mkdir -p "$SPOOL/done"
 NAME="$(date -u +%Y%m%dT%H%M%S)-$$-$KIND.json"
 

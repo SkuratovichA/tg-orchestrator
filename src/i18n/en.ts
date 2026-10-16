@@ -8,19 +8,27 @@
 // language today; proper plurals are a later change with their own fixtures),
 // and on the status screen each line carries its own label and column padding.
 //
-// One deliberate divergence: the Russian /help lists the flush words inline,
-// because they are Russian words the owner types. English points at the
-// setting instead — the words themselves are configuration now
-// (TG_FLUSH_WORDS), not text.
+// Both catalogues now point at the setting rather than listing flush words:
+// there are none by default (a reaction on a pending message closes the burst
+// window instead), and whatever TG_FLUSH_WORDS holds is configuration, not
+// text — the Russian /help keeps two of the old words as an example of the
+// shape, nothing more.
 export const en = {
   help: {
     body:
       'Personal orchestrator. Write or record a voice note — what is happening in a project, ' +
       'where some script lives, what I did about X, create a topic, send a file, run something.\n' +
       'Messages pile up until you stay quiet for {{settleMin}} min, so you can write in a series. ' +
-      'Done sooner? Send a flush word as its own message (TG_FLUSH_WORDS): ' +
-      'the window closes at once and the word itself never reaches the agent.\n' +
+      'Done sooner? React to any of your pending messages with any emoji — the window closes at once. ' +
+      'Trigger words do the same, if you set TG_FLUSH_WORDS.\n' +
       '/reset — clear this topic, /status — is the daemon alive',
+  },
+  autoTopic: {
+    pointer: '→ {{name}}\n{{link}}',
+    voice: '[voice {{seconds}}s]',
+    videoNote: '[video note {{seconds}}s]',
+    photo: '[photo]',
+    file: '[file {{name}}]',
   },
   turn: {
     slowWarning:
@@ -53,6 +61,8 @@ export const en = {
       '⚠️ Background job "{{job}}" finished and I could not process it. Raw result:',
     emptyPayload: '(empty)',
     fullOutput: 'Full output: {{file}}',
+    limitDeferred: '⏸ "{{job}}": hit the account limit, will retry at {{time}}',
+    limitGaveUp: 'The account limit held through {{count}} retries — delivering it as is.',
     badRecord: '⚠️ Broken record in the wake spool: {{file}} ({{error}})',
     noAddress:
       '⚠️ Wake-spool record with nowhere to answer (convo={{convo}}): "{{job}}". ' +
@@ -95,5 +105,40 @@ export const en = {
     usageToday: 'Usage     today:  {{roll}}',
     usageWeek: '          7 days: {{roll}}',
     logHeading: 'Log       latest events:',
+  },
+  // The approval gate's message in the learning topic (learning.ts renderProposal).
+  learning: {
+    header: '#{{id}} · {{kind}} · {{agent}}',
+    opWrite: 'write {{path}} ({{chars}} chars)',
+    opAppend: 'append {{path}} (+{{chars}} chars)',
+    opPatch: 'patch {{path}} (+{{added}}/-{{removed}} lines)',
+    opMove: 'move {{from}} → {{to}}',
+    legend: '👍 apply · 👎 reject · silence {{hours}} h = apply',
+    // The runner's own messages in the learning topic (runner.ts, the gate pass).
+    documentCaption: 'Full dump of #{{id}}',
+    applyFailed: '#{{id}}: {{error}}',
+    // Not a message: the replies to a proposal that reject it, `|`-separated.
+    // learning.ts accepts the words of EVERY catalogue, whatever the locale.
+    rejectReplies: 'no|nope',
+  },
+  // The live status message (src/live-status.ts): one message per turn, edited
+  // in place while the turn runs and deleted when it ends.
+  liveStatus: {
+    head: '⏳ {{elapsed}} · step {{steps}}',
+    thinking: 'thinking',
+    before: 'before that: {{items}}',
+    agents: 'agents ({{count}}): {{items}}',
+    read: 'reading {{target}}',
+    edit: 'editing {{target}}',
+    run: 'running: {{target}}',
+    search: 'searching for {{target}}',
+    web: 'on the web: {{target}}',
+    agent: 'agent: {{target}}',
+    message: 'messaging {{target}}',
+    plan: 'planning',
+    skill: 'loading skill {{target}}',
+    telegram: 'telegram: {{target}}',
+    mcp: 'mcp {{target}}',
+    tool: '{{target}}',
   },
 } as const;

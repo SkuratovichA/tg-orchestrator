@@ -71,3 +71,49 @@ test('thread, voice and reply lines are untouched', () => {
   assert.match(out, /\[VOICE 152s/);
   assert.match(out, /\[reply to msg 700: раньше\]/);
 });
+
+test('a message the runner moved out of General says so in the header', () => {
+  const head = headOf(
+    renderMessage(
+      base({
+        message_thread_id: 1234,
+        x_origin: { kind: 'general', copy_msg_id: 787, topic_name: '⏳ привет' },
+      }),
+      NOW
+    )
+  );
+  assert.match(head, / · topic_thread=1234/);
+  assert.match(head, /auto-topic from General \(provisional name "⏳ привет"/);
+  assert.match(head, /your reply_to_message_id here is 787/, 'the copy, not the General original');
+  assert.match(head, /rename this topic with editForumTopic/);
+  assert.ok(head.endsWith(']'), head);
+});
+
+test('a header with no auto-topic carries nothing about one', () => {
+  assert.ok(!headOf(renderMessage(base(), NOW)).includes('auto-topic'));
+});
+
+test('an auto-topic whose copy failed asks for no impossible reply id', () => {
+  const head = headOf(
+    renderMessage(
+      base({ message_thread_id: 1234, x_origin: { kind: 'general', topic_name: '⏳ привет' } }),
+      NOW
+    )
+  );
+  assert.match(head, /auto-topic from General/);
+  assert.ok(!head.includes('reply_to_message_id'), head);
+});
+
+// A guest (TG_GUESTS) speaks in a chat the owner shares with the bot. Everything
+// else in the prompt assumes the words are the owner's, so the header says
+// whose they are — on the guest's message and only there.
+test('a guest message names its sender as a GUEST, not the owner', () => {
+  const head = headOf(
+    renderMessage(base({ x_guest: { id: 777001, name: 'Alice Guest', username: 'aguest' } }), NOW)
+  );
+  assert.ok(head.includes(' · from GUEST Alice Guest (@aguest, user 777001) — not the owner'), head);
+  assert.ok(head.endsWith(']'), head);
+  const noUsername = headOf(renderMessage(base({ x_guest: { id: 777001, name: 'Alice Guest' } }), NOW));
+  assert.ok(noUsername.includes('from GUEST Alice Guest (user 777001) — not the owner'), noUsername);
+  assert.ok(!headOf(renderMessage(base(), NOW)).includes('GUEST'), 'the owner’s header is unchanged');
+});

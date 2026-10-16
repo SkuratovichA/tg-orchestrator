@@ -54,6 +54,11 @@ const argv = process.argv.slice(2);
 if (process.env.FAKE_ARGV_FILE) {
   fs.appendFileSync(process.env.FAKE_ARGV_FILE, JSON.stringify(argv) + '\\n');
 }
+// FAKE_SPAWN_FILE: where each spawn ran and with which brain (agent homes).
+if (process.env.FAKE_SPAWN_FILE) {
+  const brain = argv[argv.indexOf('--append-system-prompt-file') + 1];
+  fs.appendFileSync(process.env.FAKE_SPAWN_FILE, JSON.stringify({ cwd: process.cwd(), brain, prompt: argv.at(-1) }) + '\\n');
+}
 const line = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 const model = argv[argv.indexOf('--model') + 1];
 const mode = process.env.FAKE_CLAUDE_MODE || 'ok';
@@ -67,7 +72,8 @@ const answer = () => {
 // be walked through refusal -> probe -> recovery (FAKE_CLAUDE_MODE is fixed for
 // its lifetime, the file is not). Unset = the bucket never refills.
 const healed = !!process.env.FAKE_HEAL_FILE && fs.existsSync(process.env.FAKE_HEAL_FILE);
-if (mode === 'usage-limit-on-fable' && model === 'fable' && !healed) {
+// 'usage-limit': the whole account is out, every model refuses (20.09.2026).
+if ((mode === 'usage-limit-on-fable' && model === 'fable' && !healed) || mode === 'usage-limit') {
   // 11.09.2026, verbatim: an init, an assistant message whose TEXT is the
   // error, a result with is_error, exit 1. Every other model still answers.
   // process.exitCode, not process.exit: a hard exit truncates the pipe.
@@ -366,6 +372,47 @@ test('(f,g) a text message: exactly one claude spawn, its argv, and the usage le
 
     const kinds = eventRows(inst).map((e) => e.kind);
     assert.deepEqual(kinds, ['runner_start', 'snapshot', 'inbound', 'turn_start', 'turn_result']);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(f2) agent homes: a key in agents/psy/topics runs in that home with its brain, any other in orchestrator', async () => {
+  const tg = await startTelegram();
+  const inst = install('homes');
+  const agents = path.join(inst.cfg, 'agents');
+  const PSY_THREAD = 120;
+  fs.mkdirSync(path.join(agents, 'psy'), { recursive: true });
+  fs.writeFileSync(path.join(agents, 'psy', 'topics'), `# psy\n${CHAT_ID}:${PSY_THREAD}\n`);
+  fs.writeFileSync(path.join(agents, 'psy', 'brain.md'), 'you are psy\n');
+  const spawnFile = path.join(inst.home, 'spawns.jsonl');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1', FAKE_SPAWN_FILE: spawnFile });
+  try {
+    await waitUp(inst);
+    tg.push(ownerMsg(301, 'как ты?', { message_thread_id: PSY_THREAD }));
+    tg.push(ownerMsg(302, 'что там по деплою?'));
+    await waitFor('two claude spawns', () => readIf(spawnFile).split('\n').filter(Boolean).length === 2);
+    await waitFor('two turn results', () => eventRows(inst).filter((e) => e.kind === 'turn_result').length === 2);
+
+    const spawns = readIf(spawnFile).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const byThread = (thread) => spawns.find((s) => s.prompt.includes(`topic_thread=${thread} `));
+    const real = (p) => fs.realpathSync(p);
+    const psy = byThread(PSY_THREAD);
+    assert.equal(real(psy.cwd), real(path.join(agents, 'psy')));
+    assert.equal(psy.brain, path.join(agents, 'psy', 'brain.md'));
+    const orc = byThread(THREAD_ID);
+    // The orchestrator's home did not exist: the runner creates it before the spawn.
+    assert.equal(real(orc.cwd), real(path.join(agents, 'orchestrator')));
+    assert.equal(orc.brain, path.join(ROOT, 'agent.md'));
+
+    const starts = eventRows(inst).filter((e) => e.kind === 'turn_start');
+    assert.deepEqual(
+      starts.map((e) => [e.convo, e.payload.agent]).sort(),
+      [[`${CHAT_ID}:${PSY_THREAD}`, 'psy'], [CONVO, 'orchestrator']].sort()
+    );
+    assert.match(inst.log(), new RegExp(`\\[${CHAT_ID}:${PSY_THREAD}\\] agent: psy`));
+    assert.ok(!/agent: orchestrator/.test(inst.log()), 'the default agent is not logged');
   } finally {
     killGroup(r);
     await tg.stop();
@@ -797,7 +844,9 @@ test('(r) a .taken orphan is requeued as .retry.json at startup and then runs', 
   const r = spawnRunner(inst, tg.base);
   try {
     await waitUp(inst);
-    assert.match(inst.log(), new RegExp(`wake: requeueing orphaned ${base}\\.taken -> ${retry.replace(/\./g, '\\.')}\n`));
+    // Waited for, not read once: the up banner is logged before the requeue runs.
+    const requeued = new RegExp(`wake: requeueing orphaned ${base}\\.taken -> ${retry.replace(/\./g, '\\.')}\n`);
+    await waitFor('the requeue log line', () => requeued.test(inst.log()));
     await waitFor('the requeued record to run', () => promptCount(inst) >= 1);
     await waitFor('the requeued record to be filed', () => doneNames(inst).includes(retry));
 
@@ -846,6 +895,227 @@ test('(s) a record that already had its retry is given up into done/<f>.giveup',
 const OTHER_THREAD = 6;
 const spawnArgv = (inst) => readIf(inst.argvFile).split('\n').filter(Boolean).map((l) => JSON.parse(l));
 const modelOf = (argv) => argv[argv.indexOf('--model') + 1];
+
+// ------------------------------------------------- wake fallback delivery ---
+// A wake payload is written for a model, not for a phone. On 28.09 a wake turn
+// hit the account limit and its 200-line prompt reached the topic as ten
+// 3500-character messages, and the wake was never retried. A failed wake turn
+// now delivers one line plus the payload as a file, and a turn that failed on
+// the usage limit goes back into the spool instead.
+
+const WAKE_HEAD_FINISHED = '⚠️ Фоновая задача «whisper msg 380» закончилась, но я не смог её обработать. Сырой результат:';
+const WAKE_FULL_OUTPUT = 'Полный вывод: /tmp/tg-voice-380/voice.txt';
+const DEFER_LINE = /^⏸ «whisper msg 380»: упёрся в лимит аккаунта, повторю в \d\d:\d\d$/;
+const HALF_HOUR = 30 * 60 * 1000;
+const deferredOf = (inst) => spoolNames(inst).filter((f) => /\.json\.until-\d+$/.test(f));
+const readSpool = (inst, name) => JSON.parse(fs.readFileSync(path.join(wakeDir(inst), name), 'utf8'));
+// multipart/form-data encoding turns every line break in a TEXT field into
+// CRLF (the WHATWG FormData rule); the file part is sent as is.
+const captionOf = (doc) => String(doc.caption).replace(/\r\n/g, '\n');
+
+test('(t) a failed wake turn delivers ONE document with the payload, never the payload in chunks', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-fallback-doc');
+  const r = spawnRunner(inst, tg.base, { FAKE_CLAUDE_MODE: 'fail' });
+  try {
+    await waitUp(inst);
+    const long = 'строка результата\n'.repeat(600); // ~11K characters: three chunks in the old loop
+    const name = dropWake(inst, '20260911T120700-4242-voice-transcript.json', {
+      ...WAKE_REC,
+      text: long,
+      finishedAt: new Date().toISOString(),
+    });
+    await waitFor('the record to be filed under done/', () => doneNames(inst).includes(name));
+    await new Promise((s) => setTimeout(s, 300));
+
+    assert.equal(tg.state.documents.length, 1, 'exactly one sendDocument');
+    const [doc] = tg.state.documents;
+    assert.equal(doc.content, long, 'the whole payload, in the file');
+    assert.match(doc.fileName, /^wake-whisper-msg-380-\d{8}T\d{6}\.txt$/);
+    assert.equal(Number(doc.chat_id), CHAT_ID);
+    assert.equal(Number(doc.message_thread_id), THREAD_ID);
+    assert.equal(captionOf(doc), `${WAKE_HEAD_FINISHED}\n${WAKE_FULL_OUTPUT}`);
+    assert.ok(
+      tg.state.sent.every((m) => !String(m.text).includes('строка результата')),
+      'no piece of the payload goes out as a message'
+    );
+    const fail = eventRows(inst).filter((e) => e.kind === 'wake_fail');
+    assert.equal(fail.length, 1);
+    assert.deepEqual(fail[0].payload, { file: name, job: WAKE_REC.job, fallbackDelivered: true });
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t2) a failed wake turn with an empty payload sends the head line as one text message', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-fallback-empty');
+  const r = spawnRunner(inst, tg.base, { FAKE_CLAUDE_MODE: 'fail' });
+  try {
+    await waitUp(inst);
+    const name = dropWake(inst, '20260911T120800-4242-voice-transcript.json', {
+      ...WAKE_REC,
+      text: '',
+      finishedAt: new Date().toISOString(),
+    });
+    await waitFor('the record to be filed under done/', () => doneNames(inst).includes(name));
+    await new Promise((s) => setTimeout(s, 300));
+
+    assert.deepEqual(tg.state.documents, [], 'nothing to put in a file');
+    const heads = tg.state.sent.filter((m) => String(m.text).startsWith('⚠️ Фоновая задача'));
+    assert.equal(heads.length, 1);
+    assert.equal(heads[0].text, `${WAKE_HEAD_FINISHED}\n(пусто)\n${WAKE_FULL_OUTPUT}`);
+    assert.equal(heads[0].message_thread_id, THREAD_ID);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t3) a wake turn that hit the usage limit is deferred 30 min, not delivered, and says so once', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-limit-defer');
+  const r = spawnRunner(inst, tg.base, { FAKE_CLAUDE_MODE: 'usage-limit' });
+  try {
+    await waitUp(inst);
+    const name = dropWake(inst, '20260911T120900-4242-voice-transcript.json', {
+      ...WAKE_REC,
+      text: 'строка результата\n'.repeat(600),
+      finishedAt: new Date().toISOString(),
+    });
+    const dropped = Date.now();
+    await waitFor('the record to be put back with a not-before', () => deferredOf(inst).length === 1);
+    await waitFor('the deferral line', () => tg.state.sent.some((m) => DEFER_LINE.test(String(m.text))));
+    await new Promise((s) => setTimeout(s, 300));
+
+    const [deferred] = deferredOf(inst);
+    assert.ok(deferred.startsWith(`${name}.until-`));
+    const notBefore = Number(deferred.split('.until-')[1]);
+    assert.ok(notBefore >= dropped + HALF_HOUR && notBefore <= Date.now() + HALF_HOUR, 'due in 30 minutes');
+    assert.deepEqual(spoolNames(inst), [deferred], 'nothing else is left in the spool');
+    assert.equal(readSpool(inst, deferred).deferrals, 1);
+    assert.deepEqual(doneNames(inst), [], 'not filed: it is coming back');
+    assert.deepEqual(tg.state.documents, [], 'no delivery');
+    assert.equal(tg.state.sent.filter((m) => DEFER_LINE.test(String(m.text))).length, 1);
+    assert.ok(tg.state.sent.every((m) => !String(m.text).includes('строка результата')));
+    assert.ok(tg.state.sent.every((m) => !String(m.text).startsWith('⚠️ Фоновая задача')));
+
+    const rows = eventRows(inst);
+    const def = rows.filter((e) => e.kind === 'wake_deferred');
+    assert.equal(def.length, 1);
+    assert.equal(def[0].payload.deferrals, 1);
+    assert.equal(def[0].payload.name, deferred);
+    assert.deepEqual(rows.filter((e) => e.kind === 'wake_fail' || e.kind === 'wake_done'), []);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t4) a deferred record that is due runs its turn again and is filed', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-defer-due');
+  const r = spawnRunner(inst, tg.base);
+  try {
+    await waitUp(inst);
+    const base = '20260911T121000-4242-voice-transcript.json';
+    dropWake(inst, `${base}.until-${Date.now() - 1000}`, {
+      ...WAKE_REC,
+      finishedAt: new Date().toISOString(),
+      deferrals: 1,
+    });
+    await waitFor('the turn to run again', () => promptCount(inst) >= 1);
+    await waitFor('the record to be filed under done/', () => doneNames(inst).includes(base));
+
+    assert.deepEqual(spoolNames(inst), []);
+    assert.equal(promptCount(inst), 1);
+    assert.deepEqual(tg.state.documents, []);
+    assert.equal(eventRows(inst).filter((e) => e.kind === 'wake_done').length, 1);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t5) a later deferral is silent and backs off further', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-defer-again');
+  const r = spawnRunner(inst, tg.base, { FAKE_CLAUDE_MODE: 'usage-limit' });
+  try {
+    await waitUp(inst);
+    const base = '20260911T121100-4242-voice-transcript.json';
+    const first = `${base}.until-${Date.now() - 1000}`;
+    dropWake(inst, first, { ...WAKE_REC, finishedAt: new Date().toISOString(), deferrals: 1 });
+    const at = Date.now();
+    await waitFor('the record to be deferred again', () => deferredOf(inst).some((f) => f !== first));
+    await new Promise((s) => setTimeout(s, 300));
+
+    const [again] = deferredOf(inst);
+    assert.ok(Number(again.split('.until-')[1]) >= at + 2 * HALF_HOUR, 'the second wait is an hour');
+    assert.equal(readSpool(inst, again).deferrals, 2);
+    assert.ok(tg.state.sent.every((m) => !DEFER_LINE.test(String(m.text))), 'only the first deferral is announced');
+    assert.deepEqual(tg.state.documents, []);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t6) after five deferrals the wake gives up: one document with the count, then done/', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-defer-giveup');
+  const r = spawnRunner(inst, tg.base, { FAKE_CLAUDE_MODE: 'usage-limit' });
+  try {
+    await waitUp(inst);
+    const base = '20260911T121200-4242-voice-transcript.json';
+    dropWake(inst, `${base}.until-${Date.now() - 1000}`, {
+      ...WAKE_REC,
+      finishedAt: new Date().toISOString(),
+      deferrals: 5,
+    });
+    await waitFor('the record to be filed under done/', () => doneNames(inst).includes(base));
+    await new Promise((s) => setTimeout(s, 300));
+
+    assert.deepEqual(spoolNames(inst), []);
+    assert.equal(tg.state.documents.length, 1);
+    assert.equal(
+      captionOf(tg.state.documents[0]),
+      `${WAKE_HEAD_FINISHED}\n${WAKE_FULL_OUTPUT}\nЛимит аккаунта не отпустил за 5 повторов — отдаю как есть.`
+    );
+    assert.equal(tg.state.documents[0].content, WAKE_REC.text);
+    assert.ok(tg.state.sent.every((m) => !DEFER_LINE.test(String(m.text))));
+    const fail = eventRows(inst).filter((e) => e.kind === 'wake_fail');
+    assert.deepEqual(fail[0].payload, { file: base, job: WAKE_REC.job, fallbackDelivered: true, gaveUpAfter: 5 });
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(t7) a deferred record that is not due survives a restart untouched', async () => {
+  const tg = await startTelegram();
+  const inst = install('wake-defer-restart');
+  const name = `20260911T121300-4242-voice-transcript.json.until-${Date.now() + HALF_HOUR}`;
+  const body = JSON.stringify({ ...WAKE_REC, finishedAt: new Date().toISOString(), deferrals: 2 });
+  fs.mkdirSync(path.join(wakeDir(inst), 'done'), { recursive: true });
+  fs.writeFileSync(path.join(wakeDir(inst), name), body);
+  const r = spawnRunner(inst, tg.base);
+  try {
+    await waitUp(inst);
+    await new Promise((s) => setTimeout(s, 800)); // several poll ticks
+
+    assert.deepEqual(spoolNames(inst), [name], 'not requeued, not claimed');
+    assert.equal(fs.readFileSync(path.join(wakeDir(inst), name), 'utf8'), body, 'byte for byte');
+    assert.deepEqual(doneNames(inst), [], 'no .giveup either');
+    assert.doesNotMatch(inst.log(), /requeueing/);
+    assert.equal(promptCount(inst), 0);
+    assert.deepEqual(tg.state.sent, []);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
 
 test('(x) a turn cut off by a usage limit is continued on the fallback model, and sticks', async () => {
   const tg = await startTelegram();
@@ -965,6 +1235,349 @@ test('(xi) once the primary answers again the daemon goes back to it, and says s
     assert.deepEqual(
       eventRows(inst).filter((e) => e.kind === 'model_fallback').map((e) => e.payload.change),
       ['tripped', 'recovered', 'tripped']
+    );
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+// ------------------------------------------------------- approval gate ------
+// docs/agent-learning.md §2, as the running daemon does it: a proposal dropped
+// into proposals/pending/ is posted into the learning topic, and a 👍, a 👎, a
+// "нет" reply or the TTL decides it; the topic is cleared behind it.
+
+const LEARN_THREAD = 77;
+const LEARN_TOPIC = `${CHAT_ID}:${LEARN_THREAD}`;
+const MEMORY_BEFORE = '- [a](a.md)\n';
+
+function learningInstall(name, { topic = true } = {}) {
+  const env = ['TELEGRAM_BOT_TOKEN=' + TOKEN, 'OWNER_ID=' + OWNER_ID, 'TG_LOCALE=ru'];
+  const inst = install(name, { env: topic ? [...env, `TG_LEARNING_TOPIC=${LEARN_TOPIC}`] : env });
+  const home = path.join(inst.cfg, 'agents', 'psy');
+  fs.mkdirSync(path.join(home, 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'memory', 'MEMORY.md'), MEMORY_BEFORE);
+  return { ...inst, psyHome: home };
+}
+
+const proposalsDir = (inst) => path.join(inst.cfg, 'proposals');
+const proposalFile = (inst, state, id) => path.join(proposalsDir(inst), state, `${id}.json`);
+const storedProposal = (inst, state, id) => {
+  const text = readIf(proposalFile(inst, state, id));
+  return text ? JSON.parse(text) : null;
+};
+
+function dropProposal(inst, id, extra = {}) {
+  const dir = path.join(proposalsDir(inst), 'pending');
+  fs.mkdirSync(dir, { recursive: true });
+  const body = {
+    id,
+    agent: 'psy',
+    kind: 'memory',
+    title: 'Язык ответов',
+    summary: 'Отвечать на языке вопроса.',
+    ops: [{ op: 'append', path: 'memory/MEMORY.md', text: '- [lang](lang.md)\n' }],
+    createdAt: Date.now(),
+    ...extra,
+  };
+  fs.writeFileSync(path.join(dir, `.${id}.tmp`), JSON.stringify(body));
+  fs.renameSync(path.join(dir, `.${id}.tmp`), path.join(dir, `${id}.json`));
+  return body;
+}
+
+const ownerReaction = (messageId, emoji) => ({
+  message_reaction: {
+    chat: { id: CHAT_ID, type: 'supergroup', title: 'dev' },
+    message_id: messageId,
+    user: { id: OWNER_ID, is_bot: false, first_name: 'Sasha' },
+    date: Math.floor(Date.now() / 1000),
+    old_reaction: [],
+    new_reaction: [{ type: 'emoji', emoji }],
+  },
+});
+
+const waitPosted = (inst, id) => waitFor(`#${id} in posted/`, () => storedProposal(inst, 'posted', id));
+const waitDone = (inst, id) => waitFor(`#${id} in done/`, () => storedProposal(inst, 'done', id));
+const psyMemory = (inst) => readIf(path.join(inst.psyHome, 'memory', 'MEMORY.md'));
+
+test('(L1) a pending proposal is posted into the learning topic; a failed send is retried next pass', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-post');
+  tg.state.failNext.sendMessage = 1;
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1' });
+  try {
+    await waitUp(inst);
+    dropProposal(inst, 'pl1');
+    const posted = await waitPosted(inst, 'pl1');
+    assert.match(inst.log(), /\[learning\] post #pl1 failed: sendMessage: 500 injected/);
+    assert.equal(storedProposal(inst, 'pending', 'pl1'), null, 'moved out of pending/');
+    assert.equal(tg.state.sent.length, 1);
+    const sent = tg.state.sent[0];
+    assert.equal(sent.chat_id, CHAT_ID);
+    assert.equal(sent.message_thread_id, LEARN_THREAD);
+    assert.ok(sent.text.startsWith('#pl1 · memory · psy\nЯзык ответов\nОтвечать на языке вопроса.'), sent.text);
+    assert.equal(posted.messageId, 9000);
+    assert.equal(posted.chatId, CHAT_ID);
+    assert.ok(Number.isInteger(posted.postedAt));
+    const ev = eventRows(inst).filter((e) => e.kind === 'proposal_posted');
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].convo, LEARN_TOPIC);
+    assert.equal(ev[0].msgId, 9000);
+    assert.deepEqual(ev[0].payload, { id: 'pl1', kind: 'memory', agent: 'psy' });
+    assert.match(inst.log(), /\[learning\] posted #pl1 \(memory · psy\) as msg 9000/);
+    assert.equal(psyMemory(inst), MEMORY_BEFORE, 'posting changes nothing in the home');
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L2) 👍 on the proposal message applies it, clears the message, files it under done/', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-apply');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1' });
+  try {
+    await waitUp(inst);
+    dropProposal(inst, 'pl2');
+    const posted = await waitPosted(inst, 'pl2');
+    tg.pushUpdate(ownerReaction(posted.messageId, '👍'));
+    const done = await waitDone(inst, 'pl2');
+    assert.equal(done.outcome, 'applied');
+    assert.equal(psyMemory(inst), `${MEMORY_BEFORE}- [lang](lang.md)\n`);
+    await waitFor('the proposal message deleted', () => tg.state.deleted.length === 1);
+    assert.deepEqual(tg.state.deleted, [{ chat_id: CHAT_ID, message_id: posted.messageId }]);
+    await waitFor('proposal_applied', () => eventRows(inst).some((e) => e.kind === 'proposal_applied'));
+    const ev = eventRows(inst).find((e) => e.kind === 'proposal_applied');
+    assert.deepEqual(ev.payload, { id: 'pl2', kind: 'memory', agent: 'psy', by: 'reaction' });
+    assert.match(inst.log(), /\[learning\] applied #pl2 \(reaction\)/);
+    assert.equal(promptCount(inst), 0, 'a reaction starts no turn');
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L3) 👎 rejects: the home is untouched, the message deleted, the file in done/', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-reject');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1' });
+  try {
+    await waitUp(inst);
+    dropProposal(inst, 'pl3');
+    const posted = await waitPosted(inst, 'pl3');
+    tg.pushUpdate(ownerReaction(posted.messageId, '👎'));
+    const done = await waitDone(inst, 'pl3');
+    assert.equal(done.outcome, 'rejected');
+    assert.equal(psyMemory(inst), MEMORY_BEFORE);
+    await waitFor('proposal_rejected', () => eventRows(inst).some((e) => e.kind === 'proposal_rejected'));
+    assert.deepEqual(tg.state.deleted, [{ chat_id: CHAT_ID, message_id: posted.messageId }]);
+    assert.match(inst.log(), /\[learning\] rejected #pl3 \(reaction\)/);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L4) an owner "нет" replying to the proposal rejects it, deletes both, and starts no turn', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-reply');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1' });
+  try {
+    await waitUp(inst);
+    dropProposal(inst, 'pl4');
+    const posted = await waitPosted(inst, 'pl4');
+    tg.push(
+      ownerMsg(401, 'Нет', {
+        message_thread_id: LEARN_THREAD,
+        reply_to_message: { message_id: posted.messageId, text: '#pl4 · memory · psy' },
+      })
+    );
+    const done = await waitDone(inst, 'pl4');
+    assert.equal(done.outcome, 'rejected');
+    await waitFor('both messages deleted', () => tg.state.deleted.length === 2);
+    assert.deepEqual(
+      tg.state.deleted.map((d) => d.message_id).sort(),
+      [401, posted.messageId].sort()
+    );
+    await new Promise((s) => setTimeout(s, 300)); // no turn may follow
+    assert.equal(promptCount(inst), 0, 'no claude spawn');
+    const rows = eventRows(inst);
+    assert.deepEqual(rows.filter((e) => e.kind === 'turn_start'), []);
+    const cmd = rows.filter((e) => e.kind === 'command');
+    assert.equal(cmd.length, 1);
+    assert.equal(cmd[0].msgId, 401);
+    assert.deepEqual(cmd[0].payload, { learning: 'reject', id: 'pl4' });
+    assert.ok(rows.some((e) => e.kind === 'proposal_rejected' && e.payload.by === 'reply'));
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L5) silence: with TG_PROPOSAL_TTL_MS=1 the proposal is applied on a later pass, no reaction', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-ttl');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1', TG_PROPOSAL_TTL_MS: '1' });
+  try {
+    await waitUp(inst);
+    dropProposal(inst, 'pl5');
+    const done = await waitDone(inst, 'pl5');
+    assert.equal(done.outcome, 'applied');
+    assert.equal(tg.state.sent.length, 1, 'it was posted first');
+    assert.equal(psyMemory(inst), `${MEMORY_BEFORE}- [lang](lang.md)\n`);
+    await waitFor('proposal_applied', () => eventRows(inst).some((e) => e.kind === 'proposal_applied'));
+    assert.equal(eventRows(inst).find((e) => e.kind === 'proposal_applied').payload.by, 'ttl');
+    assert.deepEqual(tg.state.deleted.map((d) => d.message_id), [done.messageId]);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L6) a proposal too long for one message also goes out as <id>.diff.txt', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-overflow');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1' });
+  try {
+    await waitUp(inst);
+    const content = 'Длинная строка правила.\n'.repeat(300);
+    dropProposal(inst, 'pl6', { kind: 'rule', ops: [{ op: 'write', path: 'CLAUDE.md', content }] });
+    const posted = await waitPosted(inst, 'pl6');
+    assert.equal(tg.state.documents.length, 1);
+    const doc = tg.state.documents[0];
+    assert.equal(doc.fileName, 'pl6.diff.txt');
+    assert.equal(doc.caption, ru.learning.documentCaption.replace('{{id}}', 'pl6'));
+    assert.equal(Number(doc.chat_id), CHAT_ID);
+    assert.equal(Number(doc.message_thread_id), LEARN_THREAD);
+    assert.ok(doc.content.includes(content.trimEnd()), 'the whole dump is in the file');
+    assert.ok(tg.state.sent[0].text.length < 3500, 'the message itself is the short form');
+    assert.equal(posted.documentMessageId, posted.messageId + 1);
+
+    tg.pushUpdate(ownerReaction(posted.messageId, '👎'));
+    await waitDone(inst, 'pl6');
+    await waitFor('message and document deleted', () => tg.state.deleted.length === 2);
+    assert.deepEqual(tg.state.deleted.map((d) => d.message_id), [posted.messageId, posted.documentMessageId]);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L7) a patch that does not apply: proposal_failed, the error in the topic, kept in posted/, not retried', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-fail');
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1', TG_PROPOSAL_TTL_MS: '1' });
+  try {
+    await waitUp(inst);
+    const diff = '--- a/memory/MEMORY.md\n+++ b/memory/MEMORY.md\n@@ -1 +1 @@\n-nothing like this\n+x\n';
+    dropProposal(inst, 'pl7', { ops: [{ op: 'patch', path: 'memory/MEMORY.md', diff }] });
+    await waitFor('proposal_failed', () => eventRows(inst).some((e) => e.kind === 'proposal_failed'));
+    await new Promise((s) => setTimeout(s, 800)); // several more passes
+    const failed = eventRows(inst).filter((e) => e.kind === 'proposal_failed');
+    assert.equal(failed.length, 1, 'a failed apply is not retried by silence');
+    assert.equal(failed[0].payload.id, 'pl7');
+    assert.match(failed[0].payload.error, /the patch does not apply/);
+    const stored = storedProposal(inst, 'posted', 'pl7');
+    assert.equal(stored.outcome, 'failed');
+    assert.match(stored.error, /does not apply/);
+    assert.equal(storedProposal(inst, 'done', 'pl7'), null);
+    assert.equal(tg.state.sent.length, 2, 'the proposal, then its error');
+    assert.equal(tg.state.sent[1].text, `#pl7: ${stored.error}`);
+    assert.equal(tg.state.sent[1].message_thread_id, LEARN_THREAD);
+    assert.deepEqual(tg.state.deleted, [], 'a failed proposal stays visible');
+    assert.equal(psyMemory(inst), MEMORY_BEFORE);
+    assert.match(inst.log(), /\[learning\] #pl7 apply \(ttl\) failed: /);
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+test('(L8) without TG_LEARNING_TOPIC nothing is posted and proposals/ is never created', async () => {
+  const tg = await startTelegram();
+  const inst = learningInstall('learn-off', { topic: false });
+  const r = spawnRunner(inst, tg.base, { TG_BURST_SETTLE_MS: '1', TG_PROPOSAL_TTL_MS: '1' });
+  try {
+    await waitUp(inst);
+    tg.push(ownerMsg(801, 'привет'));
+    await waitFor('the turn result', () => eventRows(inst).some((e) => e.kind === 'turn_result'));
+    assert.equal(fs.existsSync(proposalsDir(inst)), false);
+    dropProposal(inst, 'pl8');
+    await new Promise((s) => setTimeout(s, 600));
+    assert.ok(storedProposal(inst, 'pending', 'pl8'), 'left where it was');
+    assert.deepEqual(tg.state.sent, []);
+    assert.ok(!eventRows(inst).some((e) => e.kind.startsWith('proposal_')));
+    assert.ok(!/\[learning\]/.test(inst.log()));
+  } finally {
+    killGroup(r);
+    await tg.stop();
+  }
+});
+
+// ---------------------------------------------------------------- guests ----
+// TG_GUESTS opens one door: a named user in a named chat. A guest's message is
+// judged by a classifier before any turn exists (src/guest-classify.ts) — here
+// a fake whose verdict the test switches through a file. `owner` = silence in
+// the chat and CHAT CONTEXT for the next turn; `bot` = a turn that is told the
+// words are a guest's. Commands stay the owner's.
+test('(q) a guest: silent when not for the bot, a marked turn when it is, never a command', async () => {
+  const tg = await startTelegram();
+  const GUEST_ID = 555001;
+  const inst = install('guests', {
+    env: ['TELEGRAM_BOT_TOKEN=' + TOKEN, 'OWNER_ID=' + OWNER_ID, 'TG_LOCALE=ru', `TG_GUESTS=${CHAT_ID}:${GUEST_ID}`],
+  });
+  const verdict = path.join(inst.home, 'verdict.json');
+  const setVerdict = (to) => fs.writeFileSync(verdict, JSON.stringify({ type: 'result', is_error: false, result: `{"to":"${to}"}` }));
+  const classifier = path.join(inst.home, 'fake-haiku.sh');
+  fs.writeFileSync(classifier, '#!/bin/bash\ncat > /dev/null\ncat "$FAKE_GUEST_VERDICT"\n', { mode: 0o755 });
+  const guestMsg = (message_id, text) => ({
+    message_id,
+    from: { id: GUEST_ID, is_bot: false, first_name: 'Guest', last_name: 'Person' },
+    chat: { id: CHAT_ID, type: 'supergroup', title: 'dev' },
+    message_thread_id: THREAD_ID,
+    text,
+  });
+  const r = spawnRunner(inst, tg.base, {
+    TG_BURST_SETTLE_MS: '1',
+    TG_GUEST_CLAUDE_BIN: classifier,
+    FAKE_GUEST_VERDICT: verdict,
+  });
+  try {
+    await waitUp(inst);
+    setVerdict('owner');
+    tg.push(guestMsg(300, 'Саш, ты где?'));
+    tg.push(guestMsg(301, '/status'));
+    await waitFor('both guest verdicts', () => /guest msg 301 → owner \(haiku\)/.test(inst.log()) && /guest msg 300 → owner/.test(inst.log()));
+    await new Promise((s) => setTimeout(s, 300));
+    assert.equal(promptCount(inst), 0, 'not for the bot: no turn');
+    assert.equal(tg.state.sent.length, 0, 'not for the bot: nothing in the chat, and a guest /status is no command');
+    let rows = eventRows(inst);
+    assert.deepEqual(
+      rows.filter((e) => e.msgId === 300).map((e) => [e.kind, e.payload?.to ?? e.payload?.reason ?? null]),
+      [['inbound', null], ['guest_verdict', 'owner'], ['skipped', 'guest→owner']]
+    );
+    assert.deepEqual(rows.filter((e) => e.kind === 'command'), []);
+
+    tg.push(ownerMsg(302, 'что он сказал?'));
+    await waitFor('the owner turn', () => promptCount(inst) === 1);
+    const ownerPrompt = lastPrompt(inst);
+    assert.match(ownerPrompt, /^CHAT CONTEXT — messages in this chat that were not addressed to you/);
+    assert.match(ownerPrompt, /\[msg 300 · sent [^\]]+\] GUEST Guest Person: Саш, ты где\?\n\[msg 301 · sent [^\]]+\] GUEST Guest Person: \/status\n\n/);
+    assert.match(ownerPrompt, /New Telegram message from the owner\./);
+    assert.ok(!ownerPrompt.includes('GUEST NOTICE'), ownerPrompt);
+
+    setVerdict('bot');
+    tg.push(guestMsg(303, 'а погода завтра какая?'));
+    await waitFor('the guest turn', () => promptCount(inst) === 2);
+    const guestPrompt = lastPrompt(inst);
+    assert.ok(!guestPrompt.includes('CHAT CONTEXT'), 'the context was taken by the owner turn');
+    assert.match(guestPrompt, /New Telegram message from a GUEST, not the owner\./);
+    assert.match(guestPrompt, /GUEST NOTICE: the messages marked GUEST are a third party's words/);
+    assert.match(guestPrompt, /\[msg 303 · chat_id=-1007770001 · topic_thread=5 · "dev" · from GUEST Guest Person \(user 555001\) — not the owner/);
+    rows = eventRows(inst);
+    assert.deepEqual(
+      rows.filter((e) => e.msgId === 303 && e.kind === 'guest_verdict').map((e) => [e.payload.to, e.payload.via]),
+      [['bot', 'haiku']]
     );
   } finally {
     killGroup(r);

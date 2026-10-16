@@ -9,5 +9,11 @@ claims.mjs — who is handling which Telegram message / chat (JSON out; exit 0 o
   ask     <chat_id> [--thread N] --from NAME --text "..." [--to NAME]
   inbox   <coop:NAME | NAME | --owner NAME> [--peek]
 
+  work claim   <key> --owner NAME [--ttl 2h] [--note TEXT] [--pid N]   take / renew (exit 3 = held by a live agent)
+  work release <key> --owner NAME [--status done|dropped]
+  work owner   <key>                          who is doing it (exit 0 = free)
+  work status                                 every work claim, live or not
+  (key = the work, not a chat: gh:owner/repo#741)
+
 Owner names: lowercase letters, digits, - and _ (they double as coop.sh mailboxes).
 DB: <TMP>/help.sqlite   coop: <TMP>/git/work/claude-coop/coop.sh

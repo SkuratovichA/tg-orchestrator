@@ -47,11 +47,18 @@ NOTICE_EVERY=1800   # seconds between batched auto-yes notices
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >> "$LOG"; }
 
+# Through scripts/tg-send.sh: the json.load that used to read the response here
+# dies on the control characters the Bot API echoes back inside the sent text,
+# and a watcher that reads that as a failure posts the notice twice.
 send() {
-  local args=(-d "chat_id=$CHAT" --data-urlencode "text=$1")
-  [ -n "$THREAD" ] && args+=(-d "message_thread_id=$THREAD")
-  curl -s --max-time 20 "$API/sendMessage" "${args[@]}" \
-    | python3 -c "import json,sys; r=json.load(sys.stdin); print('send', r.get('ok'), r.get('description',''))" >> "$LOG" 2>&1
+  local f; f="$(mktemp -t tgwatch)"
+  printf '%s' "$1" > "$f"
+  local args=(--chat "$CHAT" --text-file "$f")
+  [ -n "$THREAD" ] && args+=(--thread "$THREAD")
+  # --salt: the batched auto-yes notices repeat verbatim every NOTICE_EVERY.
+  "$HERE/tg-send.sh" "${args[@]}" --salt "tmux-watch-$$-$(date +%s)" >> "$LOG" 2>&1 \
+    || log "send failed, see above"
+  rm -f "$f"
 }
 
 report() {

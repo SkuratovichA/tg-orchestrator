@@ -1,4 +1,5 @@
-// Per-conversation turn scheduler for the tg-orchestrator runner.
+// Per-conversation turn scheduler for the tg-orchestrator runner (published as
+// `@tagents/plugin-telegram/scheduler` on 17.09.2026, for other runners to reuse).
 //
 // Why this exists: until 10.09 the main loop ran turns inline, one after
 // another, for every topic. A question in «dev» therefore waited for whatever

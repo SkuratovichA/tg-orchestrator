@@ -179,8 +179,11 @@ export function scanStringLiterals(src) {
   return found;
 }
 
-// The only two files a Cyrillic string literal may live in after stage S2.
-const RUSSIAN_FILES = ['src/config.ts', 'src/i18n/ru.ts'];
+// The only file a Cyrillic string literal may live in. It used to be two: the
+// flush-word default in src/config.ts was the second, and it is empty now that
+// a reaction closes the burst window instead of a typed word — set
+// TG_FLUSH_WORDS and the words live in the env file, which is not source.
+const RUSSIAN_FILES = ['src/i18n/ru.ts'];
 
 function collect() {
   const entries = [];
@@ -220,7 +223,7 @@ test('the tokenizer does not mistake comments, regexes or division for strings',
   ]);
 });
 
-test('Russian text lives in the catalogue and in the flush-word default, nowhere else', () => {
+test('Russian text lives in the catalogue, nowhere else', () => {
   const files = [...new Set(collect().map((e) => e.file))].sort();
   assert.deepEqual(
     files,

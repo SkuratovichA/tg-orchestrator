@@ -1,33 +1,5 @@
 [
   {
-    "file": "src/config.ts",
-    "text": "'читай'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'прочитай'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'ответь'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'отвечай'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'го'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'всё'"
-  },
-  {
-    "file": "src/config.ts",
-    "text": "'все'"
-  },
-  {
     "file": "src/i18n/ru.ts",
     "text": "'Личный оркестратор. Пиши текстом или голосом — что происходит в проектах, где какой скрипт, '"
   },
@@ -41,15 +13,31 @@
   },
   {
     "file": "src/i18n/ru.ts",
-    "text": "'Закончил мысль раньше — отдельным сообщением «читай» (ещё: го, ответь, всё, /answer): '"
+    "text": "'Закончил мысль раньше — поставь любую реакцию на своё сообщение: окно закрывается сразу. '"
   },
   {
     "file": "src/i18n/ru.ts",
-    "text": "'окно закрывается сразу, само слово в агента не уходит.\\n'"
+    "text": "'Слова-триггеры («читай», «го») работают, только если задан TG_FLUSH_WORDS.\\n'"
   },
   {
     "file": "src/i18n/ru.ts",
     "text": "'/reset — сбросить контекст топика · /status — жив ли демон'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'[голосовое {{seconds}} с]'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'[кружок {{seconds}} с]'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'[фото]'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'[файл {{name}}]'"
   },
   {
     "file": "src/i18n/ru.ts",
@@ -130,6 +118,14 @@
   {
     "file": "src/i18n/ru.ts",
     "text": "'Полный вывод: {{file}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⏸ «{{job}}»: упёрся в лимит аккаунта, повторю в {{time}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Лимит аккаунта не отпустил за {{count}} повторов — отдаю как есть.'"
   },
   {
     "file": "src/i18n/ru.ts",
@@ -258,5 +254,89 @@
   {
     "file": "src/i18n/ru.ts",
     "text": "'Лог       последние события:'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'записать {{path}} ({{chars}} симв.)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'дописать {{path}} (+{{chars}} симв.)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'патч {{path}} (+{{added}}/-{{removed}} строк)'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'переместить {{from}} → {{to}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'👍 применить · 👎 отклонить · молчание {{hours}} ч = применить'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'Полный дифф #{{id}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'нет|не надо'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'⏳ {{elapsed}} · шаг {{steps}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'думаю'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'до этого: {{items}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'агенты ({{count}}): {{items}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'читаю {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'правлю {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'выполняю: {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'ищу «{{target}}»'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'смотрю в вебе: {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'агент: {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'пишу агенту {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'планирую'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'подключаю скилл {{target}}'"
+  },
+  {
+    "file": "src/i18n/ru.ts",
+    "text": "'телеграм: {{target}}'"
   }
 ]

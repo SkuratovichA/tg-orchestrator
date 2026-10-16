@@ -125,6 +125,25 @@ test('an unreadable --text-file is reported inside the record, not as a failure'
   fs.rmSync(path.join(spool, files[0]));
 });
 
+test('WAKE_SPOOL sends the record to another daemon\'s spool, same name and shape', () => {
+  const other = path.join(tmp, 'other-runner', 'wake');
+  const r = run('bash', [WAKE_SH, '--convo', '-100:5', '--job', 'port gate', '--fail', '--text', 'log tail'], {
+    env: { HOME: home, TG_EVENTS_DB: eventsDb, WAKE_SPOOL: other },
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(spoolFiles(), [], 'the default spool stays untouched');
+  const files = fs.readdirSync(other).filter((f) => f !== 'done');
+  assert.equal(files.length, 1);
+  assert.ok(fs.existsSync(path.join(other, 'done')), 'done/ is created beside the records, as in the default spool');
+  assert.equal(r.stdout, `wake queued: ${path.join(other, files[0])}\n`);
+  assert.match(files[0], NAME_RE);
+  const rec = JSON.parse(fs.readFileSync(path.join(other, files[0]), 'utf8'));
+  assert.deepEqual(
+    { convo: rec.convo, job: rec.job, kind: rec.kind, ok: rec.ok, text: rec.text },
+    { convo: '-100:5', job: 'port gate', kind: 'job', ok: false, text: 'log tail' },
+  );
+});
+
 test('missing --convo / --job and an unknown argument all exit 2 and queue nothing', () => {
   const noConvo = wake(['--job', 'x']);
   assert.equal(noConvo.code, 2);

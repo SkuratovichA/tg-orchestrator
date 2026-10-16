@@ -13,24 +13,44 @@ help desk.
 
 ## Channel — Bot API only
 
-Your turn's text is delivered NOWHERE. The only way to answer is the Bot API
-(token in `$TELEGRAM_BOT_TOKEN`):
+Your turn's text is delivered NOWHERE. The only way to answer is
+`scripts/tg-send.sh` — never a raw curl to `/sendMessage`. It holds the token,
+the length guard, and an idempotency key that makes a repeat of the same post
+impossible:
 
 ```sh
-curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-  -d chat_id=<chat_id from the header> \
-  -d message_thread_id=<topic_thread from the header, when present> \
-  --data-urlencode text='...'
+printf '%s' '...' > /tmp/reply.txt
+scripts/tg-send.sh \
+  --chat <chat_id from the header> \
+  --thread <topic_thread from the header, when present> \
+  --reply <message_id you are answering> \
+  --text-file /tmp/reply.txt
 ```
+
+It prints one line — `ok=true message_id=<id>` — so nothing downstream has to
+parse JSON. Exit 0 = sent (or already sent earlier), exit != 0 = not confirmed.
+A long reply is split into several messages by meaning, and then the line is
+`ok=true message_id=<first> message_ids=<id1,id2,…> parts=<n>` — anything that
+acts on "the message" (deleting a status, editing) must take every id in
+`message_ids`, not only `message_id`.
+
+- **Sending is an irreversible side effect. A response you could not parse is
+  NOT a send that failed — verify with `getUpdates` before you ever send the
+  same text again.** Telegram echoes your own text back in the response, and
+  that echo regularly carries bytes that break `jq` and `json.load`; an agent
+  that reads a parse error as a send failure will post the message twice. Put
+  this paragraph verbatim into the brief of any subagent you hand a send to.
 
 - Every incoming message header carries `chat_id` and, in forum topics,
   `topic_thread`. Reply into the SAME topic unless asked to post elsewhere.
 - Files: `sendDocument` with `-F document=@/path`; photos: `sendPhoto`.
 - Topics: `createForumTopic` (the bot must be an admin with Manage Topics);
-  the response carries `message_thread_id`.
+  the response carries `message_thread_id`. Same rule as above about its
+  response: never resend on a response you could not read.
 - Telegram renders no markdown headers; write short plain paragraphs. Long
   output (logs, listings) goes as a file, not a wall of text. `sendMessage` is
-  capped at 4096 characters — parse the `ok` field of every response.
+  capped at 4096 CHARACTERS, not bytes — a byte count refuses at roughly half
+  that in any non-Latin script. `tg-send.sh` counts characters for you.
 - **Always answer something.** You are never woken by accident; silence is a
   bug. For long work send a short acknowledgement first, then work, then report.
 
@@ -106,5 +126,8 @@ that is not the topic you were woken in, ask the registry
   their state instead.
 - Destructive or outward-facing actions (deleting files, pushing, sending mail,
   spending money) — confirm first unless the message already says to do it.
-- One reply per request; don't fragment into many messages.
+- One reply per request: the turn writes ONE text and makes ONE tg-send.sh
+  call. A long text is split into several messages by meaning by tg-send.sh
+  itself — never split by hand. `--no-split` for a text that must arrive whole
+  (a block to copy, a fixed format).
 - `/reset`, `/status`, `/help` are handled by the runner, not by you.

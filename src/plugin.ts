@@ -13,7 +13,8 @@ import { definePlugin, type CliCommand, type PluginContext, type ServiceHandle }
 import { z } from 'zod';
 import { resolveLocale } from './config.ts';
 import { getI18n, resources } from './i18n/index.ts';
-import { CONFIG_ROOT, startRunner } from './runner.ts';
+import { CONFIG_ROOT } from './config.ts';
+import { startRunner } from './runner.ts';
 import { statusReply } from './status-reply.ts';
 
 // --- the status verb --------------------------------------------------------

@@ -1,6 +1,11 @@
 // wake/spool.ts — the deferred-job spool: its records, its file states, and the
 // prompt a record turns into.
 //
+// Published as `@tagents/plugin-telegram/wake-spool` (17.09.2026): every function
+// that touches the disk takes the spool directory (default: this runner's
+// WAKE_DIR), so another runner keeps its own spool, and clipWakeText/wakeAgeMs
+// are the pieces of the prompt it can share while writing its own wording.
+//
 // A turn can start work that outlives it: a local whisper run, a long build, a
 // scrape. In a purely message-driven daemon NOTHING can wake that topic's
 // session when the work finishes, so a turn could end with "I'll report back
@@ -23,6 +28,8 @@
 //   …json.taken                   claimed; a turn is running or the runner died
 //   …retry.json                   a claimed record a later startup gave back
 //   …retry.json.taken             claimed again; it has used up its one retry
+//   …json.until-<epoch ms>        its turn hit the account's usage limit; not
+//                                 due before that instant (deferItem)
 //   done/<name>.json              handled
 //   done/<name>.json.bad          unreadable, or with nowhere to answer
 //   done/…retry.json.taken.giveup twice claimed, never finished: given up
@@ -38,12 +45,16 @@ export const WAKE_DIR = path.join(CFG_DIR, 'wake');
 /** Where a record goes once it is accounted for, whatever the outcome. */
 export const WAKE_DONE = path.join(WAKE_DIR, 'done');
 
-// A whole transcript can be tens of thousands of characters; the prompt carries
-// the head and points at the file for the rest.
-const WAKE_MAX_TEXT = 20_000;
-// Past this, the result is stale enough that saying "here is your answer" alone
-// would misrepresent it — the prompt says so instead of pretending it is fresh.
-const WAKE_LATE_MS = 30 * 60 * 1000;
+/**
+ * How much of a result a prompt carries: a whole transcript can be tens of
+ * thousands of characters, the prompt takes the head and points at the file.
+ */
+export const WAKE_MAX_TEXT = 20_000;
+/**
+ * Past this, the result is stale enough that saying "here is your answer" alone
+ * would misrepresent it — a prompt says so instead of pretending it is fresh.
+ */
+export const WAKE_LATE_MS = 30 * 60 * 1000;
 
 /**
  * The record scripts/wake.sh writes. Every field is optional and every field
@@ -66,6 +77,9 @@ export const wakeRecordSchema = z.looseObject({
   file: z.string().nullish().catch(undefined),
   startedAt: z.string().nullish().catch(undefined),
   finishedAt: z.string().nullish().catch(undefined),
+  // Written by the runner, not by wake.sh: how many times this record's turn
+  // already hit the usage limit and was put back (deferItem).
+  deferrals: z.number().int().nonnegative().optional().catch(undefined),
 });
 
 export type WakeRecord = z.infer<typeof wakeRecordSchema>;
@@ -94,18 +108,27 @@ export function resolveNotify(convo: unknown): WakeNotify | null {
   return { chatId: Number(chatId), threadId: Number(threadId) || undefined };
 }
 
+/** The record's text, clipped to WAKE_MAX_TEXT with a pointer at the full output. */
+export function clipWakeText(rec: WakeRecord): string {
+  const text = String(rec.text ?? '');
+  return text.length > WAKE_MAX_TEXT
+    ? text.slice(0, WAKE_MAX_TEXT) + `\n[...clipped, full text in ${rec.file ?? 'the job output'}]`
+    : text;
+}
+
+/** How long the result has waited since the job finished, in ms; 0 when unknown. */
+export function wakeAgeMs(rec: WakeRecord, now: number = Date.now()): number {
+  return rec.finishedAt ? now - Date.parse(rec.finishedAt) : 0;
+}
+
 /**
  * The turn's prompt. It says three things the model cannot infer: that this is
  * not the owner speaking, that a previous turn of its own promised this answer,
  * and — when the result sat in the spool — how long it waited.
  */
 export function renderWakePrompt(rec: WakeRecord, now: number = Date.now()): string {
-  const text = String(rec.text ?? '');
-  const clipped =
-    text.length > WAKE_MAX_TEXT
-      ? text.slice(0, WAKE_MAX_TEXT) + `\n[...clipped, full text in ${rec.file ?? 'the job output'}]`
-      : text;
-  const age = rec.finishedAt ? now - Date.parse(rec.finishedAt) : 0;
+  const clipped = clipWakeText(rec);
+  const age = wakeAgeMs(rec, now);
   const lines = [
     `Background job finished — this is NOT a new message from the owner.`,
     `Now: ${new Date(now).toISOString()}`,
@@ -142,9 +165,14 @@ export type SpoolName =
   | { state: 'queued'; name: string; base: string }
   | { state: 'claimed'; name: string; base: string }
   | { state: 'retried'; name: string; base: string }
+  | { state: 'deferred'; name: string; base: string; notBefore: number }
   | { state: 'other'; name: string };
 
+const DEFERRED_NAME = /^(.+\.json)\.until-(\d+)$/;
+
 export function classify(name: string): SpoolName {
+  const deferred = DEFERRED_NAME.exec(name);
+  if (deferred?.[1] && deferred[2]) return { state: 'deferred', name, base: deferred[1], notBefore: Number(deferred[2]) };
   if (name.endsWith('.json.taken')) {
     const base = name.slice(0, -'.taken'.length);
     return base.endsWith('.retry.json') ? { state: 'retried', name, base } : { state: 'claimed', name, base };
@@ -225,9 +253,10 @@ const deadLetter = (taken: string, dir: string, file: string): void => {
  * Claim every queued record, by rename. Claiming FIRST is what keeps a record
  * that makes the runner crash from being replayed forever; the `.taken` file
  * stays in the spool until the turn ran, and a daemon death in between is
- * covered by the requeue at startup.
+ * covered by the requeue at startup. A deferred record joins in once it is due.
  */
-export function claimPending(dir: string = WAKE_DIR): ClaimOutcome[] {
+export function claimPending(dir: string = WAKE_DIR, now: number = Date.now()): ClaimOutcome[] {
+  releaseDue(dir, now);
   let files: string[];
   try {
     files = fs
@@ -270,4 +299,75 @@ export function finishItem(taken: string, file: string, dir: string = WAKE_DIR):
   } catch {
     /* already filed, or the spool is gone: either way there is nothing to do */
   }
+}
+
+// --------------------------------------------------------------- deferral ---
+//
+// A turn that failed because the ACCOUNT is out of usage has not looked at the
+// result at all, and delivering the raw payload instead is what put a 200-line
+// prompt into a topic as ten messages on 28.09. Such a record goes back into
+// the spool under a name that says when it is due. The not-before lives in the
+// NAME, like every other state here: claimPending and the startup requeue never
+// have to open a file to skip it (neither glob matches `.until-<ms>`), and a
+// daemon restart leaves it exactly where it was. The count lives in the record,
+// because it has to survive the rename back to `.json` and the claim after it.
+
+/** The waits between deferrals; once they are used up the record is delivered. */
+export const WAKE_DEFER_BACKOFF_MS: readonly number[] = [30, 60, 120, 240, 480].map((min) => min * 60_000);
+
+/** The next deferral of a record whose turn hit the usage limit, or null when it has had them all. */
+export function nextDeferral(rec: WakeRecord, now: number = Date.now()): { deferrals: number; notBefore: number } | null {
+  const before = rec.deferrals ?? 0;
+  const wait = WAKE_DEFER_BACKOFF_MS[before];
+  return wait === undefined ? null : { deferrals: before + 1, notBefore: now + wait };
+}
+
+/**
+ * Put a claimed record back, not due before `notBefore`, with its deferral
+ * count written into it. Two renames, each atomic: a crash between them leaves
+ * a valid `.taken` (count already raised) for the startup requeue, never two
+ * copies of the record.
+ */
+export function deferItem(
+  taken: string,
+  file: string,
+  deferrals: number,
+  notBefore: number,
+  dir: string = WAKE_DIR
+): { ok: true; name: string } | { ok: false; error: string } {
+  const name = `${file}.until-${notBefore}`;
+  const tmp = `${taken}.tmp`;
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(taken, 'utf8'));
+    const body = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    fs.writeFileSync(tmp, JSON.stringify({ ...body, deferrals }));
+    fs.renameSync(tmp, taken);
+    fs.renameSync(taken, path.join(dir, name));
+    return { ok: true, name };
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Hand every deferred record that is due back to the queue; returns their names. */
+export function releaseDue(dir: string = WAKE_DIR, now: number = Date.now()): string[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const released: string[] = [];
+  for (const name of names) {
+    const s = classify(name);
+    if (s.state !== 'deferred' || s.notBefore > now) continue;
+    try {
+      fs.renameSync(path.join(dir, name), path.join(dir, s.base));
+      released.push(s.base);
+    } catch {
+      /* gone meanwhile: nothing to release */
+    }
+  }
+  return released;
 }

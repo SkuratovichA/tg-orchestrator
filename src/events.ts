@@ -63,6 +63,12 @@ export const EVENT_KINDS = [
   'flush_word',
   'skipped',
   'session_reset',
+  // A General message moved into a topic of its own; not a closing kind — the
+  // message is still owed an answer, just somewhere else (auto-topic.ts).
+  'auto_topic',
+  // The burst window closed because the owner reacted to a pending message.
+  // Also not closing: the messages it releases are about to be answered.
+  'flush_reaction',
   'snapshot',
   'runner_start',
   'runner_stop',
@@ -71,6 +77,27 @@ export const EVENT_KINDS = [
   'wake_enqueued',
   'wake_done',
   'wake_fail',
+  // The wake turn hit the account's usage limit; the record is back in the
+  // spool with a not-before (wake/spool.ts deferItem), not delivered.
+  'wake_deferred',
+  // The approval gate (learning.ts): a proposal shown in the learning topic,
+  // then applied, rejected, or failed to apply (it stays open for the owner).
+  'proposal_posted',
+  'proposal_applied',
+  'proposal_rejected',
+  'proposal_failed',
+  // Mid-turn input (TG_MIDTURN_INPUT, src/mid-turn.ts), one row per message:
+  // written into a running turn; echoed back by claude, so that turn answers it;
+  // or not echoed and queued for a turn of its own. None of them is closing: an
+  // absorbed message is closed by its turn's own turn_result/turn_fail row, so a
+  // daemon that dies mid-turn leaves it an orphan and recovery delivers it again.
+  'msg_injected',
+  'msg_absorbed',
+  'msg_requeued',
+  // A guest's message (TG_GUESTS) was judged for the bot or for the owner
+  // (guest-classify.ts). Not closing: a `bot` message goes on to a turn, and an
+  // `owner` one is closed by the `skipped` row written next to it.
+  'guest_verdict',
 ] as const;
 /** A kind this file knows about by name. */
 export type EventKind = (typeof EVENT_KINDS)[number];

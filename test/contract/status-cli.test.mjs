@@ -418,8 +418,8 @@ test('(l) a live claude call is listed with what the transcript last showed', as
     convo: CONVO,
     msgs: 1,
   });
-  // claude -p runs with cwd=$HOME, so status.mjs looks for its transcript in
-  // the home "project" dir, with / and . munged to -.
+  // A turn from before agent homes ran with cwd=$HOME, so status.mjs still looks
+  // for its transcript in the home "project" dir, with / and . munged to -.
   const projects = path.join(inst.home, '.claude', 'projects', inst.home.replace(/[/.]/g, '-'));
   fs.mkdirSync(projects, { recursive: true });
   fs.writeFileSync(

@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "acquired": true,
+  "renewed": false,
+  "took_over_from": null,
+  "key": "gh:acme/shop#741",
+  "state": "held",
+  "reason": null,
+  "owner": "shop-product",
+  "pid": null,
+  "alive": null,
+  "note": "implementing",
+  "status": "held",
+  "claimed_at": "<ts>",
+  "age": "<dur>",
+  "expires_at": "<ts>",
+  "expires_in": "<dur>",
+  "released_at": null
+}

@@ -16,9 +16,16 @@ export const ru = {
       'Личный оркестратор. Пиши текстом или голосом — что происходит в проектах, где какой скрипт, ' +
       'что я делал по теме X, создай топик, отправь файл, запусти что-то.\n' +
       'Сообщения копятся, пока ты не замолчишь на {{settleMin}} мин — можно писать серией. ' +
-      'Закончил мысль раньше — отдельным сообщением «читай» (ещё: го, ответь, всё, /answer): ' +
-      'окно закрывается сразу, само слово в агента не уходит.\n' +
+      'Закончил мысль раньше — поставь любую реакцию на своё сообщение: окно закрывается сразу. ' +
+      'Слова-триггеры («читай», «го») работают, только если задан TG_FLUSH_WORDS.\n' +
       '/reset — сбросить контекст топика · /status — жив ли демон',
+  },
+  autoTopic: {
+    pointer: '→ {{name}}\n{{link}}',
+    voice: '[голосовое {{seconds}} с]',
+    videoNote: '[кружок {{seconds}} с]',
+    photo: '[фото]',
+    file: '[файл {{name}}]',
   },
   turn: {
     slowWarning:
@@ -56,6 +63,8 @@ export const ru = {
       '⚠️ Фоновая задача «{{job}}» закончилась, но я не смог её обработать. Сырой результат:',
     emptyPayload: '(пусто)',
     fullOutput: 'Полный вывод: {{file}}',
+    limitDeferred: '⏸ «{{job}}»: упёрся в лимит аккаунта, повторю в {{time}}',
+    limitGaveUp: 'Лимит аккаунта не отпустил за {{count}} повторов — отдаю как есть.',
     badRecord: '⚠️ Битая запись в wake-спуле: {{file}} ({{error}})',
     noAddress:
       '⚠️ Запись в wake-спуле без адреса (convo={{convo}}): «{{job}}». ' +
@@ -102,5 +111,38 @@ export const ru = {
     usageToday: 'Usage     сегодня: {{roll}}',
     usageWeek: '          7 дней:  {{roll}}',
     logHeading: 'Лог       последние события:',
+  },
+  learning: {
+    header: '#{{id}} · {{kind}} · {{agent}}',
+    opWrite: 'записать {{path}} ({{chars}} симв.)',
+    opAppend: 'дописать {{path}} (+{{chars}} симв.)',
+    opPatch: 'патч {{path}} (+{{added}}/-{{removed}} строк)',
+    opMove: 'переместить {{from}} → {{to}}',
+    legend: '👍 применить · 👎 отклонить · молчание {{hours}} ч = применить',
+    // The runner's own messages in the learning topic (runner.ts, the gate pass).
+    documentCaption: 'Полный дифф #{{id}}',
+    applyFailed: '#{{id}}: {{error}}',
+    rejectReplies: 'нет|не надо',
+  },
+  // The live status message (src/live-status.ts): one message per turn, edited
+  // in place while the turn runs and deleted when it ends. `head` is the line
+  // that ticks; the rest name one tool call each.
+  liveStatus: {
+    head: '⏳ {{elapsed}} · шаг {{steps}}',
+    thinking: 'думаю',
+    before: 'до этого: {{items}}',
+    agents: 'агенты ({{count}}): {{items}}',
+    read: 'читаю {{target}}',
+    edit: 'правлю {{target}}',
+    run: 'выполняю: {{target}}',
+    search: 'ищу «{{target}}»',
+    web: 'смотрю в вебе: {{target}}',
+    agent: 'агент: {{target}}',
+    message: 'пишу агенту {{target}}',
+    plan: 'планирую',
+    skill: 'подключаю скилл {{target}}',
+    telegram: 'телеграм: {{target}}',
+    mcp: 'mcp {{target}}',
+    tool: '{{target}}',
   },
 } as const;

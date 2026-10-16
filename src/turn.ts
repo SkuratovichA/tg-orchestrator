@@ -24,7 +24,9 @@ import {
   outcomeToolUses,
   succeeded,
   type SessionDriver,
+  type StreamEvent,
   type SessionSpec,
+  type TurnInput,
   type TurnOutcome,
 } from '@tagents/core';
 import { match } from 'ts-pattern';
@@ -40,6 +42,16 @@ export const CLAIM_OWNER = 'orchestrator';
 
 /** What the tagents dashboard shows for a turn of this daemon (child $TA_LABEL). */
 export const TURN_LABEL = 'tg-orchestrator';
+
+/**
+ * The label of one topic's turn when mid-turn input is on: `tg-orchestrator:`
+ * and the topic's thread id, or the chat id where there is no thread (key
+ * `<chat>:0`). Parallel topics then show up as separate rows in the dashboard.
+ */
+export function topicLabel(key: string): string {
+  const [chat = key, thread] = key.split(':');
+  return `${TURN_LABEL}:${thread !== undefined && thread !== '0' ? thread : chat}`;
+}
 
 export type Log = (...parts: string[]) => void;
 export type WarnInfo = { elapsedMs: number; leftMs: number };
@@ -73,7 +85,7 @@ export interface TurnRequest {
   readonly prompt: string;
   /** The claude session id to continue; null/absent starts a fresh transcript. */
   readonly resumeId?: string | null;
-  /** --append-system-prompt-file: agent.md, or the topic's own brain. */
+  /** --append-system-prompt-file: agent.md, or the agent home's brain.md. */
   readonly systemPromptFile?: string;
   readonly model?: string;
   readonly effort?: string;
@@ -81,8 +93,10 @@ export interface TurnRequest {
   readonly logFile?: string;
   /** Merged last into the child env — the bot token and the owner id. */
   readonly env?: Readonly<Record<string, string>>;
-  /** Defaults to the owner's home, the way every turn has always run. */
+  /** The agent's home (src/agent-home.ts); absent = the owner's home. */
   readonly cwd?: string;
+  /** The Claude Code account this turn logs in as; null/absent = the personal one. */
+  readonly configDir?: string | null;
   readonly label?: string;
   /** Tests point this at a fake `claude`; production leaves it alone. */
   readonly bin?: string;
@@ -92,22 +106,38 @@ export interface TurnRequest {
   readonly warnBeforeMs?: number;
   readonly exitGraceMs?: number;
   readonly onWarn?: OnWarn | null;
+  /**
+   * Watches the turn's stream-json as it arrives — what the live status
+   * message is built from (src/live-status.ts). Called from the stream reader,
+   * so it must be cheap and must not throw; core swallows what it throws
+   * anyway, and a watcher must never fail the turn it is only watching.
+   */
+  readonly onEvent?: ((e: StreamEvent) => void) | undefined;
+  /**
+   * Messages written into the turn while it runs (src/mid-turn.ts). Present =
+   * the prompt goes through stdin and the attempt reports `delivered`; absent =
+   * the turn is exactly what it was before mid-turn input existed.
+   */
+  readonly input?: AsyncIterable<TurnInput>;
   readonly log?: Log;
 }
 
 /**
  * The session this daemon runs a turn under. Everything the child sees comes
- * from here: cwd = $HOME, the personal Claude account (configDir null drops an
- * inherited CLAUDE_CONFIG_DIR — an account is a whole login, not a setting),
- * permissions skipped because there is nobody at a terminal to answer, and the
- * label/log pair the tagents dashboard reads.
+ * from here: cwd = the agent's home ($HOME when none is given), the Claude
+ * account (configDir null = the personal one, and it drops an inherited
+ * CLAUDE_CONFIG_DIR — an account is a whole login, not a setting; a string =
+ * that account, chosen by the runner from TG_CLAUDE_CONFIG_DIR per turn, so a
+ * deadline reverts without a restart), permissions skipped because there is
+ * nobody at a terminal to answer, and the label/log pair the tagents dashboard
+ * reads.
  */
 export function turnSpec(req: TurnRequest): SessionSpec {
   return {
     kind: 'claude',
     cwd: req.cwd ?? os.homedir(),
     label: req.label ?? TURN_LABEL,
-    configDir: null,
+    configDir: req.configDir ?? null,
     skipPermissions: true,
     ...(req.model === undefined ? {} : { model: req.model }),
     ...(req.effort === undefined ? {} : { effort: req.effort }),
@@ -135,6 +165,8 @@ export interface Attempt {
   readonly durationMs: number | null;
   /** The owner-facing one-liner, or null for a turn that worked. */
   readonly error: string | null;
+  /** Only for a turn that had `input`: every item it took, and whether claude echoed it. */
+  readonly delivered?: readonly { readonly id: string; readonly replayed: boolean }[];
 }
 
 /** The one place a TurnOutcome becomes the attempt the runner books. */
@@ -153,6 +185,7 @@ export function toAttempt(outcome: TurnOutcome): Attempt {
     numTurns: done ? outcome.numTurns : null,
     durationMs: done ? outcome.durationMs : null,
     error: formatAttemptError(outcome),
+    ...(outcome.delivered === undefined ? {} : { delivered: outcome.delivered }),
   };
 }
 
@@ -168,6 +201,8 @@ export async function runClaude(req: TurnRequest): Promise<Attempt> {
     log: (line: string): void => log(line),
     ...(req.warnBeforeMs === undefined ? {} : { warnBeforeMs: req.warnBeforeMs }),
     ...(req.exitGraceMs === undefined ? {} : { exitGraceMs: req.exitGraceMs }),
+    ...(req.onEvent === undefined ? {} : { onEvent: req.onEvent }),
+    ...(req.input === undefined ? {} : { input: req.input }),
     // A warning is a Telegram send: it may reject, and a rejected notification
     // must never take the turn down with it.
     ...(onWarn === null

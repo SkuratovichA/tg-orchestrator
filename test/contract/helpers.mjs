@@ -160,7 +160,14 @@ export const readIf = (file) => {
 // short, because nothing in the contract depends on the server honouring the
 // timeout the caller asks for — only on it answering.
 export function startFakeTelegram({ token, longpollMs = 150 }) {
-  const state = { queue: [], sent: [], getMe: 0, methods: [], nextId: 9000 };
+  // deleted: deleteMessage bodies; documents: sendDocument's file name and fields
+  // (multipart). failNext: method -> how many upcoming calls answer ok:false.
+  // rawControlCharsInEcho: emit the sendMessage response with U+0000–U+001F
+  // unescaped, the way the Bot API does when the sent text carried them.
+  const state = {
+    queue: [], sent: [], deleted: [], documents: [], getMe: 0, methods: [],
+    nextId: 9000, failNext: {}, rawControlCharsInEcho: false,
+  };
   const timers = new Set();
   const later = (fn, ms) => {
     const t = setTimeout(() => {
@@ -174,25 +181,46 @@ export function startFakeTelegram({ token, longpollMs = 150 }) {
   const server = http.createServer((req, res) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
-    req.on('end', () => {
-      const send = (obj) => {
+    req.on('end', async () => {
+      const sendRaw = (text) => {
         try {
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(obj));
+          res.end(text);
         } catch {
           /* the runner aborted this request (shutdown) */
         }
       };
+      const send = (obj) => sendRaw(JSON.stringify(obj));
       const m = /^\/bot(.+?)\/(\w+)$/.exec(req.url ?? '');
       if (!m || m[1] !== token) return send({ ok: false, error_code: 401, description: 'Unauthorized' });
       const method = m[2];
       let body = {};
-      try {
-        body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
-      } catch {
-        /* keep {} */
+      const raw = Buffer.concat(chunks);
+      if (String(req.headers['content-type'] ?? '').startsWith('multipart/form-data')) {
+        // Parsed by the same WHATWG FormData the runner builds it with.
+        const form = await new Request('http://fake/', {
+          method: 'POST',
+          headers: { 'content-type': req.headers['content-type'] },
+          body: raw,
+        }).formData();
+        for (const [k, v] of form) body[k] = typeof v === 'string' ? v : { name: v.name, content: await v.text() };
+      } else if (String(req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded')) {
+        // What curl posts. scripts/tg-send.sh sends the text with
+        // --data-urlencode, so without this branch the fake sees an empty body
+        // and can never echo back a reply_to_message.
+        for (const [k, v] of new URLSearchParams(raw.toString('utf8'))) body[k] = v;
+      } else {
+        try {
+          body = chunks.length ? JSON.parse(raw.toString('utf8')) : {};
+        } catch {
+          /* keep {} */
+        }
       }
       state.methods.push(method);
+      if (state.failNext[method] > 0) {
+        state.failNext[method]--;
+        return send({ ok: false, error_code: 500, description: `injected ${method} failure` });
+      }
       if (method === 'getMe') {
         state.getMe++;
         return send({ ok: true, result: { id: 7, is_bot: true, first_name: 'Test', username: 'testbot' } });
@@ -209,10 +237,39 @@ export function startFakeTelegram({ token, longpollMs = 150 }) {
       }
       if (method === 'sendMessage') {
         state.sent.push(body);
-        return send({
-          ok: true,
-          result: { message_id: state.nextId++, date: 1, chat: { id: body.chat_id }, text: body.text },
-        });
+        const result = { message_id: state.nextId++, date: 1, chat: { id: body.chat_id }, text: body.text };
+        // Real Telegram echoes the answered message back inside the response.
+        // Without it the fixture holds exactly one message_id and cannot tell a
+        // correct extraction apart from a greedy one that takes the LAST match —
+        // which is the reply TARGET, and in a forum group that id belongs to
+        // another topic.
+        if (body.reply_to_message_id !== undefined) {
+          result.reply_to_message = {
+            message_id: Number(body.reply_to_message_id),
+            date: 1,
+            chat: { id: body.chat_id },
+            text: 'the message being answered',
+          };
+        }
+        // JSON.stringify escapes U+0000–U+001F; Telegram does not always, and
+        // those raw bytes are what makes a strict JSON parser reject the body.
+        if (state.rawControlCharsInEcho) {
+          return sendRaw(
+            JSON.stringify({ ok: true, result }).replace(/\\u00([0-1][0-9a-f])/g, (_, h) =>
+              String.fromCharCode(parseInt(h, 16)),
+            ),
+          );
+        }
+        return send({ ok: true, result });
+      }
+      if (method === 'deleteMessage') {
+        state.deleted.push(body);
+        return send({ ok: true, result: true });
+      }
+      if (method === 'sendDocument') {
+        const { document, ...fields } = body;
+        state.documents.push({ fileName: document?.name, content: document?.content, ...fields });
+        return send({ ok: true, result: { message_id: state.nextId++, date: 1, chat: { id: Number(body.chat_id) } } });
       }
       return send({ ok: false, error_code: 404, description: `unsupported method ${method}` });
     });
@@ -230,6 +287,12 @@ export function startFakeTelegram({ token, longpollMs = 150 }) {
           // Real Telegram stamps the send time in Unix seconds and the prompt now
           // renders it; a fixed `date: 1` would print 1970 and a 56-year age.
           state.queue.push({ update_id, message: { date: Math.floor(Date.now() / 1000), ...message } });
+          return update_id;
+        },
+        // Any other update kind, e.g. { message_reaction: {...} }.
+        pushUpdate(update) {
+          const update_id = 1000 + state.queue.length;
+          state.queue.push({ update_id, ...update });
           return update_id;
         },
         async stop() {

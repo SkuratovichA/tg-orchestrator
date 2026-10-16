@@ -10,34 +10,37 @@ importers:
     dependencies:
       '@tagents/core':
         specifier: github:SkuratovichA/tagents#path:/packages/core
-        version: https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core(typescript@7.0.2)
+        version: https://codeload.github.com/SkuratovichA/tagents/tar.gz/051012d3ae93b5337b3c67373bb030b3431aebe2#path:/packages/core(typescript@7.0.2)
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
       i18next:
         specifier: ^26.4
-        version: 26.4.2(typescript@7.0.2)
+        version: 26.4.7(typescript@7.0.2)
       ts-pattern:
         specifier: ^5.9
-        version: 5.9.0
+        version: 5.9.2
       zod:
         specifier: ^4.6
-        version: 4.6.5
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: ^22
-        version: 22.20.2
+        version: 22.20.5
       typescript:
         specifier: 7.0.2
         version: 7.0.2
 
 packages:
 
-  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core':
-    resolution: {path: /packages/core, tarball: https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b}
-    version: 0.3.2
+  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/051012d3ae93b5337b3c67373bb030b3431aebe2#path:/packages/core':
+    resolution: {path: /packages/core, tarball: https://codeload.github.com/SkuratovichA/tagents/tar.gz/051012d3ae93b5337b3c67373bb030b3431aebe2}
+    version: 0.3.3
     engines: {node: '>=22.18'}
     hasBin: true
 
-  '@types/node@22.20.2':
-    resolution: {integrity: sha512-xlvWf4Vs9n1PEVYwP1n4vvG07M6y8WgvJ2t0vbrWTmijsIHp1cS+uJ2kMIRdY3nHZK0nCYKrPeD171+SzF4/zw==}
+  '@types/node@22.20.5':
+    resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -159,16 +162,20 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  i18next@26.4.2:
-    resolution: {integrity: sha512-RX+R0VLg13IbvRuJSxnqykUFS9vQZTl8wYpWPCIUDWVrSGjsQywB5Y+pjzrkboxGAuYfJZVH1InFTdgBdxq6ug==}
+  diff@9.0.0:
+    resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
+    engines: {node: '>=0.3.1'}
+
+  i18next@26.4.7:
+    resolution: {integrity: sha512-p/3hqy6EcuqRs6wNwBYwGGC1fzBJSMxV9zMuN814ab/7QjdZbXfjXwuPZdQbngX6KDOTxM01uUiZyqmMB8ghZg==}
     peerDependencies:
       typescript: ^5 || ^6 || ^7
     peerDependenciesMeta:
       typescript:
         optional: true
 
-  ts-pattern@5.9.0:
-    resolution: {integrity: sha512-6s5V71mX8qBUmlgbrfL33xDUwO0fq48rxAu2LBE11WBeGdpCPOsXksQbZJHvHwhrd3QjUusd3mAOM5Gg0mFBLg==}
+  ts-pattern@5.9.2:
+    resolution: {integrity: sha512-qAf+7M7Jjk7uebZeIo9uEzyintfuRtgHdzM9dqxRKcMi2dt76Ec+FH2wW3bnU9TuGLkZIJLoLs7cCQnU7Tu8ig==}
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -183,20 +190,20 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
-  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/91445c7890e76912fe18ddca437165dc364b336b#path:/packages/core(typescript@7.0.2)':
+  '@tagents/core@https://codeload.github.com/SkuratovichA/tagents/tar.gz/051012d3ae93b5337b3c67373bb030b3431aebe2#path:/packages/core(typescript@7.0.2)':
     dependencies:
-      i18next: 26.4.2(typescript@7.0.2)
+      i18next: 26.4.7(typescript@7.0.2)
       yaml: 2.9.1
-      zod: 4.6.5
+      zod: 4.6.7
     transitivePeerDependencies:
       - typescript
 
-  '@types/node@22.20.2':
+  '@types/node@22.20.5':
     dependencies:
       undici-types: 6.21.0
 
@@ -260,11 +267,13 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  i18next@26.4.2(typescript@7.0.2):
+  diff@9.0.0: {}
+
+  i18next@26.4.7(typescript@7.0.2):
     optionalDependencies:
       typescript: 7.0.2
 
-  ts-pattern@5.9.0: {}
+  ts-pattern@5.9.2: {}
 
   typescript@7.0.2:
     optionalDependencies:
@@ -293,4 +302,4 @@ snapshots:
 
   yaml@2.9.1: {}
 
-  zod@4.6.5: {}
+  zod@4.6.7: {}

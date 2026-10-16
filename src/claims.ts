@@ -9,6 +9,10 @@
 //   chat lease     (chat_id, thread_id)  — "agent X owns this chat until T". Carries
 //                  the owner's pid: a dead owner's lease counts as expired, and an
 //                  expired lease can be taken over.
+//   work claim     (key)                 — "agent X is doing THIS piece of work", e.g.
+//                  gh:acme/shop#741. A message lives in one topic, a
+//                  GitHub issue does not: two topics' agents can both decide to
+//                  implement it. Liveness like a lease (TTL, dead pid = free).
 //   ask / inbox    the "бро, ты отвечаешь по ним?" channel — a thin wrapper over
 //                  claude-coop's coop.sh mailboxes (one mailbox per owner
 //                  name, unread-only reads, cursor-based, locked). Detached agents
@@ -62,6 +66,9 @@ export const DEFAULT_TTL_MS = 2 * 3600 * 1000;
 
 // Same rule as coop.sh, so every owner name is also a valid coop mailbox.
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
+// A work key names the work, not a chat: `gh:owner/repo#741`, `ticket:it-741`.
+// Printable ASCII without spaces, so it survives a shell word and a log line.
+const WORK_KEY_RE = /^[A-Za-z0-9][\x21-\x7e]{0,199}$/;
 const DAY_MS = 24 * 3600 * 1000;
 const RELEASED_KEEP_MS = DAY_MS; // released rows are pruned after a day
 const HELD_CLAIM_KEEP_MS = 7 * DAY_MS; // a held claim nobody ever released: a week
@@ -92,6 +99,17 @@ CREATE TABLE IF NOT EXISTS chat_leases (
   expires_at  INTEGER NOT NULL,
   released_at INTEGER,
   PRIMARY KEY (chat_id, thread_id)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS work_claims (
+  key         TEXT    NOT NULL PRIMARY KEY,
+  owner       TEXT    NOT NULL,
+  pid         INTEGER,
+  note        TEXT,
+  status      TEXT    NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'done', 'dropped')),
+  claimed_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  released_at INTEGER
 ) WITHOUT ROWID;
 `;
 
@@ -242,6 +260,64 @@ export interface UnleaseResult {
   current?: LeaseView | null;
 }
 
+export interface WorkRow {
+  key: string;
+  owner: string;
+  pid: number | null;
+  note: string | null;
+  status: string;
+  claimed_at: number;
+  expires_at: number;
+  released_at: number | null;
+}
+
+interface WorkFacts {
+  pid: number | null;
+  alive: boolean | null;
+  note: string | null;
+  status: string;
+  claimed_at: string | null;
+  age: string;
+  expires_at: string | null;
+  expires_in: string;
+  released_at: string | null;
+}
+
+/** A work claim rendered for a caller; the "never claimed" case carries no facts. */
+export type WorkView =
+  | { key: string; state: 'free'; reason: string; owner: null }
+  | ({ key: string; state: 'free' | 'held'; reason: string | null; owner: string } & WorkFacts);
+
+/** `work claim <key>`: a refusal describes the LIVE holder, an acquisition the claim as it now stands. */
+export type WorkClaimResult =
+  | ({ ok: false; acquired: false } & WorkView)
+  | ({
+      ok: true;
+      acquired: true;
+      renewed: boolean;
+      took_over_from: { owner: string; reason: string } | null;
+    } & WorkView);
+
+export interface WorkReleaseResult {
+  ok: boolean;
+  released: boolean;
+  key: string;
+  owner: string;
+  status?: ReleaseStatus;
+  reason?: string;
+  current?: WorkView | null;
+}
+
+/** `work owner <key>`: ok (exit 0) means the work is free to take. */
+export type WorkOwnerVerdict = { ok: boolean } & WorkView;
+
+export interface WorkStatusResult {
+  ok: true;
+  now: string | null;
+  db: string;
+  work: WorkView[];
+}
+
 export interface StatusClaim {
   chat_id: number;
   message_id: number;
@@ -300,6 +376,15 @@ export interface InboxResult {
 // ---------------------------------------------------------------- helpers ---
 
 export class ClaimsError extends Error {}
+
+function checkWorkKey(key: string | true | undefined): string {
+  if (typeof key !== 'string' || !WORK_KEY_RE.test(key)) {
+    throw new ClaimsError(
+      `work key must be 1-200 printable characters without spaces (e.g. gh:owner/repo#741), got '${String(key)}'`,
+    );
+  }
+  return key;
+}
 
 function checkName(name: string | true | undefined, what = 'owner'): string {
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
@@ -452,6 +537,19 @@ function toLeaseRow(r: SqlRow): LeaseRow {
   };
 }
 
+function toWorkRow(r: SqlRow): WorkRow {
+  return {
+    key: colText(r['key']),
+    owner: colText(r['owner']),
+    pid: colNumOrNull(r['pid']),
+    note: colTextOrNull(r['note']),
+    status: colText(r['status']),
+    claimed_at: colNum(r['claimed_at']),
+    expires_at: colNum(r['expires_at']),
+    released_at: colNumOrNull(r['released_at']),
+  };
+}
+
 const optional = <T>(r: SqlRow | undefined, to: (row: SqlRow) => T): T | null => (r ? to(r) : null);
 
 // --------------------------------------------------------------------- db ---
@@ -468,7 +566,7 @@ export function openDb(file: string = DB_PATH): ClaimsDb {
   return db;
 }
 
-export function prune(db: ClaimsDb, now = Date.now()): { claims: number; leases: number } {
+export function prune(db: ClaimsDb, now = Date.now()): { claims: number; leases: number; work: number } {
   const a = db
     .prepare(
       `DELETE FROM message_claims
@@ -483,7 +581,14 @@ export function prune(db: ClaimsDb, now = Date.now()): { claims: number; leases:
            OR (status = 'held' AND expires_at < ?)`,
     )
     .run(now - RELEASED_KEEP_MS, now - RELEASED_KEEP_MS);
-  return { claims: Number(a.changes), leases: Number(b.changes) };
+  const c = db
+    .prepare(
+      `DELETE FROM work_claims
+        WHERE (released_at IS NOT NULL AND released_at < ?)
+           OR (status = 'held' AND expires_at < ?)`,
+    )
+    .run(now - RELEASED_KEEP_MS, now - RELEASED_KEEP_MS);
+  return { claims: Number(a.changes), leases: Number(b.changes), work: Number(c.changes) };
 }
 
 // ------------------------------------------------------------ message claims ---
@@ -638,8 +743,12 @@ export function annotateMessages(
 // --------------------------------------------------------------- chat leases ---
 
 // What a lease row means right now. 'held' only when status is held, the TTL
-// has not passed AND the owner's process is not known to be dead.
-export function leaseState(row: LeaseRow | null | undefined, now = Date.now()): LeaseState {
+// has not passed AND the owner's process is not known to be dead. Work claims
+// live by the same rule, so this reads only the columns the two tables share.
+export function leaseState(
+  row: Pick<LeaseRow, 'status' | 'expires_at' | 'pid'> | null | undefined,
+  now = Date.now(),
+): LeaseState {
   if (!row) return { state: 'free', reason: 'no lease' };
   if (row.status !== 'held') return { state: 'free', reason: `released (${row.status})` };
   if (row.expires_at <= now) return { state: 'free', reason: 'ttl expired' };
@@ -677,12 +786,12 @@ const readLease = (db: ClaimsDb, chatId: number, threadId: number): LeaseRow | n
  * What `leaseChat` is about to do, decided before anything is written: refuse
  * (somebody else is alive on it), renew (ours and still live) or take it over.
  */
-type LeaseDecision =
-  | { kind: 'refuse'; row: LeaseRow }
+type LeaseDecision<R> =
+  | { kind: 'refuse'; row: R }
   | { kind: 'renew' }
   | { kind: 'take'; from: { owner: string; reason: string } | null };
 
-function decideLease(row: LeaseRow | null, st: LeaseState, owner: string): LeaseDecision {
+function decideLease<R extends { owner: string }>(row: R | null, st: LeaseState, owner: string): LeaseDecision<R> {
   if (!row) return { kind: 'take', from: null };
   if (st.state === 'held') return row.owner === owner ? { kind: 'renew' } : { kind: 'refuse', row };
   return { kind: 'take', from: row.owner === owner ? null : { owner: row.owner, reason: st.reason } };
@@ -820,6 +929,135 @@ export function chatOwner(
       if (whole.state === 'held') return { ok: false, ...whole };
       return { ok: true, ...free };
     });
+}
+
+// ------------------------------------------------------------- work claims ---
+
+function describeWork(key: string, row: WorkRow | null, now: number): WorkView {
+  if (!row) return { key, state: 'free', reason: 'never claimed', owner: null };
+  const st = leaseState(row, now);
+  return {
+    key,
+    state: st.state,
+    reason: st.reason,
+    owner: row.owner,
+    pid: row.pid,
+    alive: st.state === 'held' ? (st.alive ?? pidAlive(row.pid)) : pidAlive(row.pid),
+    note: row.note,
+    status: row.status,
+    claimed_at: iso(row.claimed_at),
+    age: human(now - row.claimed_at),
+    expires_at: iso(row.expires_at),
+    expires_in: row.expires_at > now ? human(row.expires_at - now) : 'expired',
+    released_at: iso(row.released_at),
+  };
+}
+
+const readWork = (db: ClaimsDb, key: string): WorkRow | null =>
+  optional(db.prepare(`SELECT * FROM work_claims WHERE key = ?`).get(key), toWorkRow);
+
+export interface WorkClaimOptions {
+  key: string;
+  owner: string;
+  pid?: number | null;
+  ttlMs?: number;
+  note?: string | null;
+  now?: number;
+}
+
+// Take or renew the claim on a piece of work. The lease rules, keyed by the
+// work instead of the chat: same owner → renew (TTL, pid, note refreshed); no
+// row, released, expired or dead owner → take over; a live claim of somebody
+// else → refused with the holder, so the caller says who has it and stops.
+// Unlike a message claim, `done` does not stick: an issue that comes back
+// (changes requested, reopened) is work again.
+export function claimWork(
+  db: ClaimsDb,
+  { key, owner, pid = null, ttlMs = DEFAULT_TTL_MS, note = null, now = Date.now() }: WorkClaimOptions
+): WorkClaimResult {
+  checkWorkKey(key);
+  checkName(owner);
+  if (!Number.isInteger(ttlMs) || ttlMs <= 0) throw new ClaimsError('ttlMs must be a positive integer');
+  const expiresAt = now + ttlMs;
+  return tx(db, () => {
+    const row = readWork(db, key);
+    const acquire = (renewed: boolean, from: { owner: string; reason: string } | null): WorkClaimResult => ({
+      ok: true,
+      acquired: true,
+      renewed,
+      took_over_from: from,
+      ...describeWork(key, readWork(db, key), now),
+    });
+    return match(decideLease(row, leaseState(row, now), owner))
+      .with({ kind: 'refuse' }, ({ row: held }) => ({
+        ok: false as const,
+        acquired: false as const,
+        ...describeWork(key, held, now),
+      }))
+      .with({ kind: 'renew' }, () => {
+        db.prepare(
+          `UPDATE work_claims SET pid = ?, note = COALESCE(?, note), expires_at = ? WHERE key = ?`,
+        ).run(pid, note, expiresAt, key);
+        return acquire(true, null);
+      })
+      .with({ kind: 'take' }, ({ from }) => {
+        db.prepare(
+          `INSERT OR REPLACE INTO work_claims
+             (key, owner, pid, note, status, claimed_at, expires_at, released_at)
+           VALUES (?, ?, ?, ?, 'held', ?, ?, NULL)`,
+        ).run(key, owner, pid, note, now, expiresAt);
+        return acquire(false, from);
+      })
+      .exhaustive();
+  });
+}
+
+export function releaseWork(
+  db: ClaimsDb,
+  {
+    key,
+    owner,
+    status = 'done',
+    note = undefined,
+    now = Date.now(),
+  }: { key: string; owner: string; status?: ReleaseStatus; note?: string | null | undefined; now?: number }
+): WorkReleaseResult {
+  checkWorkKey(key);
+  checkName(owner);
+  if (!['done', 'dropped'].includes(status)) throw new ClaimsError(`status must be done|dropped, got '${status}'`);
+  return tx(db, () => {
+    const r = db
+      .prepare(
+        `UPDATE work_claims SET status = ?, released_at = ?, note = COALESCE(?, note)
+          WHERE key = ? AND owner = ? AND status = 'held'`,
+      )
+      .run(status, now, note ?? null, key, owner);
+    if (Number(r.changes) === 1) return { ok: true, released: true, key, owner, status };
+    const row = readWork(db, key);
+    return {
+      ok: false,
+      released: false,
+      key,
+      owner,
+      reason: !row ? 'not claimed' : row.owner !== owner ? `held by ${row.owner}` : `already ${row.status}`,
+      current: row ? describeWork(key, row, now) : null,
+    };
+  });
+}
+
+export function workOwner(db: ClaimsDb, { key, now = Date.now() }: { key: string; now?: number }): WorkOwnerVerdict {
+  checkWorkKey(key);
+  const view = describeWork(key, readWork(db, key), now);
+  return { ok: view.state === 'free', ...view };
+}
+
+export function workStatus(db: ClaimsDb, { now = Date.now() }: { now?: number } = {}): WorkStatusResult {
+  const work = db
+    .prepare(`SELECT * FROM work_claims ORDER BY claimed_at DESC`)
+    .all()
+    .map(toWorkRow)
+    .map((r) => describeWork(r.key, r, now));
+  return { ok: true, now: iso(now), db: DB_PATH, work };
 }
 
 export function status(
@@ -1012,6 +1250,12 @@ const USAGE = `claims.mjs — who is handling which Telegram message / chat (JSO
   ask     <chat_id> [--thread N] --from NAME --text "..." [--to NAME]
   inbox   <coop:NAME | NAME | --owner NAME> [--peek]
 
+  work claim   <key> --owner NAME [--ttl 2h] [--note TEXT] [--pid N]   take / renew (exit 3 = held by a live agent)
+  work release <key> --owner NAME [--status done|dropped]
+  work owner   <key>                          who is doing it (exit 0 = free)
+  work status                                 every work claim, live or not
+  (key = the work, not a chat: gh:owner/repo#741)
+
 Owner names: lowercase letters, digits, - and _ (they double as coop.sh mailboxes).
 DB: ${DB_PATH}   coop: ${COOP_SH}`;
 
@@ -1053,7 +1297,7 @@ function out(obj: object): void {
  * text or exactly one JSON document whose `ok` decides between 0 and 3 — which
  * is why the exit codes are chosen in ONE place (`runCli`) and nowhere else.
  */
-type CommandOutcome = { kind: 'text'; text: string } | { kind: 'json'; value: { ok: boolean } };
+export type CommandOutcome = { kind: 'text'; text: string } | { kind: 'json'; value: { ok: boolean } };
 
 const json = (value: { ok: boolean }): CommandOutcome => ({ kind: 'json', value });
 
@@ -1168,6 +1412,44 @@ export function main(argv: readonly string[] = process.argv.slice(2)): CommandOu
         })
       );
     }
+    case 'work': {
+      const sub = pos.shift();
+      const key = () => checkWorkKey(need(pos[0], 'work key'));
+      const releaseStatus = (): ReleaseStatus => {
+        const wanted = opts['status'] ?? 'done';
+        if (wanted !== 'done' && wanted !== 'dropped') {
+          throw new ClaimsError(`status must be done|dropped, got '${String(wanted)}'`);
+        }
+        return wanted;
+      };
+      switch (sub) {
+        case 'claim':
+          return json(
+            claimWork(openDb(), {
+              key: key(),
+              owner: need(opts['owner'], '--owner'),
+              pid: resolveAgentPid(opts['pid']),
+              ttlMs: parseTtl(opts['ttl']),
+              note: valueOf(opts['note'], '--note'),
+            })
+          );
+        case 'release':
+          return json(
+            releaseWork(openDb(), {
+              key: key(),
+              owner: need(opts['owner'], '--owner'),
+              status: releaseStatus(),
+              note: valueOf(opts['note'], '--note') ?? undefined,
+            })
+          );
+        case 'owner':
+          return json(workOwner(openDb(), { key: key() }));
+        case 'status':
+          return json(workStatus(openDb()));
+        default:
+          throw new ClaimsError(`unknown work command '${String(sub)}' — claim | release | owner | status\n${USAGE}`);
+      }
+    }
     case 'inbox': {
       const raw = opts['owner'] ?? pos[0];
       const owner = String(need(raw, 'inbox owner (coop:NAME, NAME or --owner NAME)')).replace(/^coop:/, '');
@@ -1189,8 +1471,17 @@ export function main(argv: readonly string[] = process.argv.slice(2)): CommandOu
  * anything else — and 1 for every failure, reported as JSON like the rest.
  */
 export function runCli(argv: readonly string[] = process.argv.slice(2)): number {
+  return runCommand(() => main(argv), (e) => e instanceof ClaimsError);
+}
+
+/**
+ * The funnel itself, shared with learning.ts: `produce` answers, and `expected`
+ * says which thrown errors are the command's own (printed as their message)
+ * rather than bugs (printed with the stack).
+ */
+export function runCommand(produce: () => CommandOutcome, expected: (e: unknown) => e is Error): number {
   try {
-    return match(main(argv))
+    return match(produce())
       .with({ kind: 'text' }, ({ text }) => {
         process.stdout.write(text);
         return EXIT.OK;
@@ -1201,7 +1492,7 @@ export function runCli(argv: readonly string[] = process.argv.slice(2)): number 
       })
       .exhaustive();
   } catch (e) {
-    out({ ok: false, error: e instanceof ClaimsError ? e.message : (e instanceof Error ? (e.stack ?? String(e)) : String(e)) });
+    out({ ok: false, error: expected(e) ? e.message : (e instanceof Error ? (e.stack ?? String(e)) : String(e)) });
     return EXIT.ERROR;
   }
 }

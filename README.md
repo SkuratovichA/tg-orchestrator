@@ -16,8 +16,15 @@ over all of it, and a pair of hands on the machine.
 - **A topic is a session.** Each `chat_id:thread_id` resumes its own
   `claude -p` session; it resets after 6 h of silence or `/reset`.
 - **Bursts.** Messages typed in a row (three texts and two voice notes) arrive
-  as one turn. A "flush word" (`читай`, `го`, `/answer`, …) closes the window
-  at once and is not forwarded to the model.
+  as one turn. Done sooner? React to any message still waiting — any emoji — and
+  the window closes at once; the reaction itself never reaches the model. Flush
+  words do the same, but only if `TG_FLUSH_WORDS` is set (there are none by
+  default any more).
+- **Auto-topics.** A message dropped into the forum's General gets a topic of
+  its own immediately: the runner creates it with a provisional `⏳ …` name taken
+  from the message, copies the message in, leaves a pointer in General, and asks
+  the model (in the message header) to rename the topic once the subject is
+  clear. One burst = one topic. `TG_AUTO_TOPIC=0` switches it off.
 - **Parallel turns across topics, serial within one.** A question in one topic
   never waits for an analysis running in another. Messages typed while a topic
   is mid-turn fold into its next turn instead of waiting unread in Telegram.
@@ -110,7 +117,8 @@ over all of it, and a pair of hands on the machine.
 ```
 getUpdates (long-poll)
   → owner-only filter → `inbound` event on disk → offset advances → claim in the registry
-  → burst window (sliding, closed early by a flush word; commands bypass it)
+  → General → a topic of its own (auto-topic.ts), before the `inbound` event
+  → burst window (sliding, closed early by a reaction or a flush word; commands bypass it)
   → group by topic → per-topic queue (scheduler.mjs)
   → claude -p --resume <topic session> --append-system-prompt-file agent.md
       stream-json: tool calls and the final result are seen as they happen
@@ -121,8 +129,25 @@ getUpdates (long-poll)
 The agent answers through the Bot API itself; the runner posts only
 infrastructure messages (a timeout warning, "could not process", `/status`).
 
-Per-topic brains: drop `agents/<chat_id>_<thread_id>.md` and that topic gets it
-as its system prompt instead of `agent.md`. Such a file must be self-contained.
+**Agent homes.** An agent is a directory under
+`~/.config/tg-orchestrator/agents/<name>/`, and every turn runs with that
+directory as its cwd, so Claude Code loads the home's `CLAUDE.md`, its
+`.claude/settings.json` (an absolute `autoMemoryDirectory` pointing at the
+home's `memory/`), rules and skills by itself. A home's `topics` file lists the
+`chat_id:thread_id` keys it answers; the first agent (names sorted) that lists a
+key owns it, and every other key goes to `orchestrator`. The system prompt is
+the home's `brain.md` when it has one, else `agent.md`. The `turn_start` event
+carries the agent's name. `scripts/migrate-agent-homes.sh` creates the homes
+once (idempotent). Design: `docs/agent-learning.md`.
+
+**The approval gate.** An agent does not edit its own rules, skills or memory
+index in a turn: it files a proposal (`node src/learning.mjs propose --file
+<json>`) into `~/.config/tg-orchestrator/proposals/pending/`. With
+`TG_LEARNING_TOPIC` set, the daemon posts every proposal into that topic; a 👍
+applies it, a 👎 or a "no" reply rejects it, silence for `TG_PROPOSAL_TTL_MS`
+applies it, and the resolved message is deleted. A weekly curator agent
+(`scripts/install-curator.sh`) walks every agent's memory and files its
+clean-up as proposals. Without `TG_LEARNING_TOPIC` none of this runs.
 
 **The event log.** Every accepted message is written to `events.sqlite`
 (`src/events.mjs`, WAL + `synchronous=FULL`) BEFORE the Telegram offset moves
@@ -179,11 +204,16 @@ All in `~/.config/tg-orchestrator/env` (or the process environment).
 | `OWNER_ID` | — | the only Telegram user the bot listens to |
 | `TG_CLAUDE_TIMEOUT_MS` | 50 min | hard cap per turn; warning to the topic 5 min before |
 | `TG_MAX_PARALLEL_TURNS` | 3 | topics in a turn at once (one topic is always serial) |
-| `TG_CLAUDE_MODEL`, `TG_CLAUDE_EFFORT` | runner defaults | passed to `claude -p` |
+| `TG_CLAUDE_MODEL`, `TG_CLAUDE_EFFORT` | `fable`, `xhigh` | passed to `claude -p`; set them in the env file (a launchd start has no other environment), the process environment wins for an ad-hoc run |
 | `TG_CLAUDE_FALLBACK_MODEL` | `opus` | where a turn continues when `TG_CLAUDE_MODEL` is out of usage credits; empty (or the same model) switches the fallback off |
 | `TG_CLAUDE_FALLBACK_TTL_MS` | 60 min | how long the next turns stay on the fallback before one of them probes the original model again |
+| `TG_CLAUDE_CONFIG_DIR` | *(unset)* | absolute path of the Claude Code config dir the child sessions log in as, e.g. `~/.claude-work` — an account, not a setting; unset/empty = the personal account the daemon itself runs under |
+| `TG_CLAUDE_CONFIG_DIR_UNTIL` | *(unset)* | ISO-8601 timestamp (`2026-09-21T16:00:00Z`) after which `TG_CLAUDE_CONFIG_DIR` lapses and the turns go back to the personal account, with no restart; unset = no deadline. Unlike the other options a value that cannot be read refuses to start the daemon |
 | `TG_LOCALE` | `en` | language of everything the bot and `orc-status` say: `en` or `ru` |
-| `TG_FLUSH_WORDS` | `читай,прочитай,ответь,отвечай,го,go,answer,всё,все` | comma-separated words that close the burst window at once; matched after trim, lowercase and a leading `/` |
+| `TG_FLUSH_WORDS` | *(empty)* | comma-separated words that close the burst window at once; matched after trim, lowercase and a leading `/`. Empty by default — a reaction does this now |
+| `TG_AUTO_TOPIC` | `1` | give every message in the forum's General a topic of its own; `0`/`false`/`off`/`no` to leave them in General |
+| `TG_LEARNING_TOPIC` | *(unset)* | `chat_id:thread_id` of the approval-gate topic; unset = the gate is off |
+| `TG_PROPOSAL_TTL_MS` | 24 h | silence after which a posted proposal is applied |
 | `TG_EVENTS_DB` | `~/.config/tg-orchestrator/events.sqlite` | durable event log (inbound + turn outcomes) |
 | `CLAIMS_DB` | `~/.config/claude-agents/claims.sqlite` | registry database, shared with other agents |
 | `CLAIMS_COOP` | first existing `~/git/work/claude-coop`, `~/git/claude-coop`, `~/claude-coop` | claude-coop `coop.sh`, for hand-over |
@@ -207,6 +237,7 @@ src/runner.mjs            the entry point: boots the telegram plugin's `runner` 
 src/plugin.ts             the tagents plugin: the catalogue, the runner service, `status`
 src/runner.ts             the daemon itself: poll, burst, dispatch, wake spool, commands,
                           heartbeat — startRunner(deps) → { drain, stop(reason), done }
+src/agent-home.ts         which agent owns a topic: its home (the turn's cwd) and its brain
 src/status-reply.ts       the /status sentence, said by the daemon and by the `status` verb
 src/turn.mjs              one claude turn — the lifecycle (stream-json, timeout + warning,
                           grace kill after result) is @tagents/core's; what stays here is the
@@ -226,6 +257,12 @@ src/arc-cdp.mjs           dependency-free Chrome DevTools driver (for browser ch
 scripts/wake.sh           background-job → turn bridge (call on every exit path)
 scripts/restart-when-idle.sh   drain-based restart
 scripts/transcribe-fallback.sh local whisper for a voice note, reports through wake.sh
+scripts/migrate-agent-homes.sh  one-off, idempotent: build the agent homes, move memory into them
+scripts/install-curator.sh      idempotent: the curator's home + its weekly launchd job
+scripts/curator-weekly.sh       what that job runs: a wake record for the learning topic
+src/learning.mjs          the approval gate (CLI: propose / list / show / apply / reject / wrap)
+                          — a shim; the module is src/learning.ts
+templates/curator/brain.md  the curator's system prompt ({{REPO}}, {{AGENTS_ROOT}} substituted)
 scripts/publish.sh        export the public subset of a private fork into its own repo
 test/                     node:test suites, no dependencies
 agent.example.md          system prompt template → agent.md

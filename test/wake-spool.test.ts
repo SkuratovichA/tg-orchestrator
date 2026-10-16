@@ -15,12 +15,20 @@ import { test, type TestContext } from 'node:test';
 import {
   claimPending,
   classify,
+  deferItem,
   ensureSpool,
+  nextDeferral,
+  releaseDue,
+  WAKE_DEFER_BACKOFF_MS,
   finishItem,
   parseWakeRecord,
   planRequeue,
   applyRequeue,
+  clipWakeText,
   renderWakePrompt,
+  wakeAgeMs,
+  WAKE_LATE_MS,
+  WAKE_MAX_TEXT,
   requeueDestination,
   resolveNotify,
   wakeRecordSchema,
@@ -119,6 +127,18 @@ test('a failed job is presented as failed, with the retry rule attached', () => 
   assert.match(p, /^The job FAILED\. Error output:$/m);
   assert.doesNotMatch(p, /^Result:$/m);
   assert.match(p, /Retry at most\nonce, and only if the error looks transient\.$/);
+});
+
+test('the shared prompt bits: the age since finishedAt (0 when unknown) and the clip', () => {
+  assert.equal(wakeAgeMs(parseWakeRecord(JSON.stringify(REC)), NOW), 5 * 60_000);
+  assert.equal(wakeAgeMs({ convo: '1:2' }, NOW), 0);
+  assert.equal(WAKE_LATE_MS, 30 * 60_000);
+  const long = 'я'.repeat(WAKE_MAX_TEXT + 5_000);
+  const clipped = clipWakeText(parseWakeRecord(JSON.stringify({ ...REC, text: long })));
+  assert.ok(clipped.endsWith(`[...clipped, full text in ${REC.file}]`));
+  assert.ok(clipped.length < WAKE_MAX_TEXT + 200);
+  assert.equal(clipWakeText({ convo: '1:2', text: 'short' }), 'short');
+  assert.equal(clipWakeText({ convo: '1:2' }), '');
 });
 
 test('LATE appears past 30 minutes and carries how long it waited', () => {
@@ -268,4 +288,66 @@ test('non-record files in the spool are ignored', (t) => {
 test('the module defaults point at the real spool under $HOME', () => {
   assert.equal(WAKE_DIR, path.join(os.homedir(), '.config', 'tg-orchestrator', 'wake'));
   assert.equal(WAKE_DONE, path.join(WAKE_DIR, 'done'));
+});
+
+// --------------------------------------------------------------- deferral ---
+
+test('a deferred name carries its base and its not-before', () => {
+  assert.deepEqual(classify('20260911T120000-1-job.json.until-1760000000000'), {
+    state: 'deferred',
+    name: '20260911T120000-1-job.json.until-1760000000000',
+    base: '20260911T120000-1-job.json',
+    notBefore: 1760000000000,
+  });
+  assert.equal(classify('a.retry.json.until-5').state, 'deferred');
+  assert.equal(classify('a.json.until-soon').state, 'other');
+});
+
+test('the backoff is 30 min, 1 h, 2 h, 4 h, 8 h, then nothing', () => {
+  const MIN = 60_000;
+  assert.deepEqual(WAKE_DEFER_BACKOFF_MS, [30 * MIN, 60 * MIN, 120 * MIN, 240 * MIN, 480 * MIN]);
+  assert.deepEqual(nextDeferral(parseWakeRecord(JSON.stringify(REC)), 1000), { deferrals: 1, notBefore: 1000 + 30 * MIN });
+  assert.deepEqual(nextDeferral({ ...REC, deferrals: 4 }, 0), { deferrals: 5, notBefore: 480 * MIN });
+  assert.equal(nextDeferral({ ...REC, deferrals: 5 }, 0), null);
+});
+
+test('deferItem puts the record back under its not-before, the count written into it', (t) => {
+  const dir = spool(t);
+  const file = drop(dir, 'a.json', { ...REC, extra: 'kept' });
+  const [item] = claimPending(dir, 0);
+  assert.ok(item && item.kind === 'ready');
+  assert.deepEqual(deferItem(item.taken, file, 1, 5000, dir), { ok: true, name: 'a.json.until-5000' });
+  assert.deepEqual(names(dir), ['a.json.until-5000']);
+  const back = JSON.parse(fs.readFileSync(path.join(dir, 'a.json.until-5000'), 'utf8'));
+  assert.deepEqual(back, { ...REC, extra: 'kept', deferrals: 1 });
+  assert.equal(parseWakeRecord(JSON.stringify(back)).deferrals, 1);
+});
+
+test('a deferral that cannot happen is reported, not thrown, and leaves no tmp file', (t) => {
+  const dir = spool(t);
+  const r = deferItem(path.join(dir, 'gone.json.taken'), 'gone.json', 1, 5000, dir);
+  assert.equal(r.ok, false);
+  assert.deepEqual(names(dir), []);
+});
+
+test('a deferred record is skipped until due, then claimed like any other', (t) => {
+  const dir = spool(t);
+  drop(dir, 'a.json.until-5000', { ...REC, deferrals: 1 });
+  assert.deepEqual(claimPending(dir, 4999), [], 'not due yet');
+  assert.deepEqual(names(dir), ['a.json.until-5000']);
+  assert.deepEqual(releaseDue(dir, 4999), []);
+  const [item, ...rest] = claimPending(dir, 5000);
+  assert.deepEqual(rest, []);
+  assert.ok(item && item.kind === 'ready');
+  assert.equal(item.file, 'a.json');
+  assert.equal(item.rec.deferrals, 1);
+  assert.deepEqual(names(dir), ['a.json.taken']);
+});
+
+test('the startup requeue leaves a deferred record alone', (t) => {
+  const dir = spool(t);
+  drop(dir, 'a.json.until-9999999999999', REC);
+  drop(dir, 'b.retry.json.until-9999999999999', REC);
+  assert.deepEqual(planRequeue(dir), []);
+  assert.equal(requeueDestination('a.json.until-9999999999999', dir), null);
 });

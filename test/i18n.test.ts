@@ -19,7 +19,7 @@ import { ru } from '../src/i18n/ru.ts';
 import { getI18n, resources } from '../src/i18n/index.ts';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
-const AREAS = ['help', 'turn', 'reset', 'status', 'wake', 'recovery', 'duration', 'statusCli'];
+const AREAS = ['help', 'autoTopic', 'turn', 'reset', 'status', 'wake', 'recovery', 'duration', 'statusCli', 'learning', 'liveStatus'];
 
 type Catalogue = Record<string, Record<string, string>>;
 

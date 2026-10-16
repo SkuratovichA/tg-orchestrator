@@ -6,7 +6,12 @@
   "license": "MIT",
   "private": true,
   "exports": {
-    ".": "./src/plugin.ts"
+    ".": "./src/plugin.ts",
+    "./scheduler": "./src/scheduler.ts",
+    "./model-fallback": "./src/model-fallback.ts",
+    "./wake-spool": "./src/wake/spool.ts",
+    "./agent-home": "./src/agent-home.ts",
+    "./live-status": "./src/live-status.ts"
   },
   "tagents": {
     "apiVersion": 1,
@@ -22,10 +27,11 @@
     "pretest": "test -f node_modules/@tagents/core/dist/index.js || { echo 'build @tagents/core first: pnpm -C ../../tagents/packages/core build' >&2; exit 1; }",
     "test": "node --test \"test/**/*.test.mjs\" \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "check": "for f in src/*.mjs test/*.mjs test/contract/*.mjs; do [ -f \"$f\" ] || continue; node --check \"$f\" || exit 1; done; for f in ensure.sh scripts/*.sh; do bash -n \"$f\" || exit 1; done"
+    "check": "for f in src/*.mjs test/*.mjs test/contract/*.mjs; do [ -f \"$f\" ] || continue; node --check \"$f\" || exit 1; done; for f in ensure.sh scripts/*.sh scripts/lib/*.sh; do bash -n \"$f\" || exit 1; done"
   },
   "dependencies": {
     "@tagents/core": "github:SkuratovichA/tagents#path:/packages/core",
+    "diff": "^9.0.0",
     "i18next": "^26.4",
     "ts-pattern": "^5.9",
     "zod": "^4.6"

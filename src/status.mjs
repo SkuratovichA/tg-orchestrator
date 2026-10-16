@@ -19,14 +19,22 @@ const STATUS_FILE = path.join(CFG_DIR, 'status.json');
 const PID_FILE = path.join(CFG_DIR, 'runner.pid');
 const LEDGER = path.join(CFG_DIR, 'usage.jsonl');
 const LOG_FILE = path.join(CFG_DIR, 'runner.log');
-// claude -p runs with cwd=$HOME, so its transcripts live under the home
-// "project" dir (path munged the way claude code does: / and . become -).
-const TRANSCRIPTS = path.join(
-  os.homedir(),
-  '.claude',
-  'projects',
-  os.homedir().replace(/[/.]/g, '-')
-);
+const AGENTS_DIR = path.join(CFG_DIR, 'agents');
+// claude -p runs with cwd = an agent home (src/agent-home.ts), so a turn's
+// transcript lives under that home's "project" dir (path munged the way claude
+// code does: / and . become -). $HOME's dir stays in the list for turns that
+// ran before the homes existed.
+const projectDir = (cwd) => path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[/.]/g, '-'));
+function transcriptDirs() {
+  let homes = [];
+  try {
+    homes = fs
+      .readdirSync(AGENTS_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => path.join(AGENTS_DIR, d.name));
+  } catch {}
+  return [...homes, os.homedir()].map(projectDir);
+}
 
 // Same file, same variable, same precedence as the daemon: a status screen in
 // a different language from the topic it describes would be its own bug.
@@ -81,7 +89,8 @@ function claudeCalls() {
     return [];
   }
   // Our claude children carry `--append-system-prompt-file <repo>/agent.md`,
-  // so the repo root (not src/) is what identifies them in ps output.
+  // or an agent home's brain.md, so the repo root (not src/) or the agents dir
+  // is what identifies them in ps output.
   // TG_ORCHESTRATOR_ROOT overrides the root to match — the contract oracle
   // sets it to a per-test path so the production daemon's live calls never
   // show up in a test snapshot; nothing else sets it.
@@ -90,7 +99,7 @@ function claudeCalls() {
     path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
   return out
     .split('\n')
-    .filter((l) => l.includes('claude -p') && l.includes(root))
+    .filter((l) => l.includes('claude -p') && (l.includes(root) || l.includes(AGENTS_DIR + '/')))
     .map((l) => {
       const m = l.trim().match(/^(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/);
       if (!m) return null;
@@ -102,21 +111,25 @@ function claudeCalls() {
 
 // Peek into the live transcript: the last thing the agent actually did.
 function transcriptPeek(sessionId) {
-  let file = sessionId && path.join(TRANSCRIPTS, `${sessionId}.jsonl`);
-  if (!file || !fs.existsSync(file)) {
+  const dirs = transcriptDirs();
+  let file = sessionId && dirs.map((d) => path.join(d, `${sessionId}.jsonl`)).find((f) => fs.existsSync(f));
+  if (!file) {
     // fresh session: newest transcript touched in the last 5 minutes
-    try {
-      const cands = fs
-        .readdirSync(TRANSCRIPTS)
-        .filter((f) => f.endsWith('.jsonl'))
-        .map((f) => ({ f, m: fs.statSync(path.join(TRANSCRIPTS, f)).mtimeMs }))
-        .filter((x) => Date.now() - x.m < 5 * 60 * 1000)
-        .sort((a, b) => b.m - a.m);
-      if (!cands.length) return null;
-      file = path.join(TRANSCRIPTS, cands[0].f);
-    } catch {
-      return null;
-    }
+    const cands = dirs
+      .flatMap((dir) => {
+        try {
+          return fs
+            .readdirSync(dir)
+            .filter((f) => f.endsWith('.jsonl'))
+            .map((f) => ({ f: path.join(dir, f), m: fs.statSync(path.join(dir, f)).mtimeMs }));
+        } catch {
+          return [];
+        }
+      })
+      .filter((x) => Date.now() - x.m < 5 * 60 * 1000)
+      .sort((a, b) => b.m - a.m);
+    if (!cands.length) return null;
+    file = cands[0].f;
   }
   try {
     const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
